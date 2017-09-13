@@ -17,7 +17,10 @@ public:
     Pointer &operator=(const Pointer &);
     Pointer &operator=(Pointer &&);
 
-    void *get() const { return 0; }
+    void *get() const;
+
+private:
+    void *ptr;
 };
 
 } // namespace Allocator
