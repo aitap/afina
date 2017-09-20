@@ -5,6 +5,20 @@
 namespace Afina {
 namespace Allocator {
 
+const std::uint32_t block_magic = 0xd700e698, footer_magic = 0xe26ab656;
+
+// lives at fixed offset, contains global info about our allocator
+struct footer {
+    std::uint32_t magic;
+    footer() : magic(footer_magic){};
+};
+
+// header for a memory block
+struct block {
+    std::uint32_t magic;
+    block() : magic(block_magic){};
+};
+
 Simple::Simple(void *base, size_t size) : _base(base), _base_len(size) {}
 
 /**
