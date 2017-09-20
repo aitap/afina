@@ -9,7 +9,7 @@ class Simple;
 
 class Pointer {
 public:
-    Pointer();
+    Pointer(void *ptr = nullptr);
 
     Pointer(const Pointer &);
     Pointer(Pointer &&);
