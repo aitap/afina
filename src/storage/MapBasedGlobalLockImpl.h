@@ -1,8 +1,8 @@
 #ifndef AFINA_STORAGE_MAP_BASED_GLOBAL_LOCK_IMPL_H
 #define AFINA_STORAGE_MAP_BASED_GLOBAL_LOCK_IMPL_H
 
-#include <map>
 #include <string>
+#include <unordered_map>
 
 #include <afina/Storage.h>
 
@@ -29,7 +29,7 @@ public:
     bool Get(const std::string &key, std::string &value) override;
 
 private:
-    std::map<std::string, std::string> _backend;
+    std::unordered_map<std::string, std::string> backend;
 };
 
 } // namespace Storage
