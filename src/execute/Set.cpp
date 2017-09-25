@@ -1,5 +1,5 @@
-#include <afina/execute/Set.h>
 #include <afina/Storage.h>
+#include <afina/execute/Set.h>
 
 #include <iostream>
 
@@ -10,8 +10,7 @@ void Set::Execute(Storage &storage, const std::string &args, std::string &out) {
     std::cout << "Set(" << _key << "): " << args << std::endl;
 
     std::string value;
-    if (storage.Get(_key, value))
-    {
+    if (storage.Get(_key, value)) {
         storage.Put(_key, args);
         out = "STORED";
     } else {

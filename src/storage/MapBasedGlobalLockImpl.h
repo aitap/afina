@@ -36,7 +36,7 @@ public:
     bool Get(const std::string &key, std::string &value) const override;
 
 private:
-    std::mutex _lock;
+    mutable std::mutex _lock;
 
     size_t _max_size;
 
