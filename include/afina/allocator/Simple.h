@@ -15,7 +15,7 @@ class Pointer;
  * Wraps given memory area and provides defagmentation allocator interface on
  * the top of it.
  *
- * Allocator instance doesn't take ownership of wrapped memmory and do not delete it
+ * Allocator instance doesn't take ownership of wrapped memory and do not delete it
  * on destruction. So caller must take care of resource cleaup after allocator stop
  * being needs
  */

@@ -6,10 +6,7 @@
 namespace Afina {
 namespace Allocator {
 
-enum class AllocErrorType {
-    InvalidFree,
-    NoMemory,
-};
+enum class AllocErrorType { InvalidFree, NoMemory, CorruptionDetected };
 
 class AllocError : std::runtime_error {
 private:

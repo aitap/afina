@@ -13,11 +13,13 @@ char buf[65536];
 
 TEST(SimpleTest, AllocInRange) {
     Simple a(buf, sizeof(buf));
+	std::cout << a.dump();
 
     int size = 500;
 
     Pointer p = a.alloc(size);
     char *v = reinterpret_cast<char *>(p.get());
+	std::cout << a.dump();
 
     EXPECT_GE(v, buf);
     EXPECT_LE(v + size, buf + sizeof(buf));
