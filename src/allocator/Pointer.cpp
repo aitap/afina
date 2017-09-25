@@ -3,28 +3,15 @@
 namespace Afina {
 namespace Allocator {
 
-Pointer::Pointer(void *ptr_) : ptr(ptr_) {}
-Pointer::Pointer(const Pointer &p_) { ptr = p_.ptr; }
+Pointer::Pointer(void **ptr_) : ptr(ptr_) {}
 
-Pointer::Pointer(Pointer &&p_) {
-    ptr = p_.ptr;
-    p_.ptr = nullptr;
-}
+// no allocations and C++11, heck yeah
+Pointer::Pointer(const Pointer &p_) = default;
+Pointer::Pointer(Pointer &&p_) = default;
+Pointer &Pointer::operator=(const Pointer &p_) = default;
+Pointer &Pointer::operator=(Pointer &&p_) = default;
 
-Pointer &Pointer::operator=(const Pointer &p_) {
-    if (this != &p_)
-        ptr = p_.ptr; // actually, this is safe even without the check
-    return *this;
-}
-Pointer &Pointer::operator=(Pointer &&p_) {
-    if (this != &p_) { // wait what?
-        ptr = p_.ptr;
-        p_.ptr = nullptr;
-    }
-    return *this;
-}
-
-void *Pointer::get() const { return ptr; }
+void *Pointer::get() const { return *ptr; }
 
 } // namespace Allocator
 } // namespace Afina

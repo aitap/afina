@@ -9,7 +9,7 @@ class Simple;
 
 class Pointer {
 public:
-    Pointer(void *ptr = nullptr);
+    Pointer(void **ptr = nullptr);
 
     Pointer(const Pointer &);
     Pointer(Pointer &&);
@@ -20,7 +20,7 @@ public:
     void *get() const;
 
 private:
-    void *ptr;
+    void **ptr;
 };
 
 } // namespace Allocator
