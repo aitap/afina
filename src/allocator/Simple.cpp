@@ -42,6 +42,15 @@ struct footer {
         if (magic != footer_magic)
             throw AllocError{AllocErrorType::CorruptionDetected, "Corruption found in footer"};
     }
+    void cleanup_pointer_slots() {
+        // decrement max_allocated if there are nullptr at the end of pointer array
+        while (!*((void **)this - max_allocated) && max_allocated) {
+            max_allocated--;
+            // adjust the size of the last block accordingly
+            // even if it's occupied, so what? I only extend it anyway
+            last->size += sizeof(void *);
+        }
+    }
 };
 
 Simple::Simple(void *base, size_t size) : _base(base), _base_len(size) {
@@ -80,7 +89,7 @@ Pointer Simple::alloc(size_t N) {
         *pptr = nullptr;
     }
 
-    // now find a free block
+    // now find a free block (TODO: this should probably be a block method?)
     for (block *free_block = ftr->first_free; free_block; free_block = free_block->next) {
         free_block->check();      // better safe than sorry
         if (free_block->size < N) // not big enough for the caller's taste
@@ -89,15 +98,15 @@ Pointer Simple::alloc(size_t N) {
         if (free_block->size - N > 2 * sizeof(block)) { // it's feasible to split off another block
             block *new_block = new ((char *)free_block + sizeof(block) + N)
                 block{free_block->size - N - sizeof(block), free_block->next};
-                                                        /*
-                                                         |BLOCK|================= size ================================|
-                                            
-                                                          _ free_block      _ free_block + sizeof(block) + N
-                                                         /                 /
-                                                         |BLOCK|==== N ====|BLOCK|=== size - N - sizeof(block) ========|
-                                                               |
-                                                               \_ free_block+sizeof(block)
-                                                        */
+            /*
+             |BLOCK|================= size ================================|
+
+              _ free_block      _ free_block + sizeof(block) + N
+             /                 /
+             |BLOCK|==== N ====|BLOCK|=== size - N - sizeof(block) ========|
+                   |
+                   \_ free_block+sizeof(block)
+            */
             free_block->next = new_block;
             free_block->size = N;
             if (free_block == ftr->last) // well, it isn't last anymore
@@ -110,9 +119,8 @@ Pointer Simple::alloc(size_t N) {
         *pptr = (void *)((char *)free_block + sizeof(block)); // pointer past the end
         return Pointer(pptr);
     }
-    // clean up exceccive pointer slots, if any
-    while (!*((void **)ftr - ftr->max_allocated) && ftr->max_allocated)
-        ftr->max_allocated--;
+    // TODO: defrag and try again
+    ftr->cleanup_pointer_slots();
     // we're still here?
     throw AllocError{AllocErrorType::NoMemory, "Couldn't find a suitable free memory block"};
 }
@@ -125,10 +133,45 @@ Pointer Simple::alloc(size_t N) {
 void Simple::realloc(Pointer &p, size_t N) {}
 
 /**
- * TODO: semantics
  * @param p Pointer
  */
-void Simple::free(Pointer &p) {}
+void Simple::free(Pointer &p) {
+    block *to_free = (block *)((char *)p.get() - sizeof(block));
+    try {
+        to_free->check();
+    } catch (AllocError &e) {
+        throw AllocError{AllocErrorType::InvalidFree, "Corruption detected while checking the pointer to free"};
+    }
+
+    footer *ftr = (footer *)((char *)_base + _base_len - sizeof(footer));
+    ftr->check(); // you can't be paranoid enough
+
+    // free the pointer slot
+    *p.ptr = nullptr;
+    ftr->cleanup_pointer_slots();
+    // clean up the pointer object
+    p.ptr = nullptr;
+
+    // now the interesting part: linked list
+    to_free->free = true;
+    // there might be a free block before this (check could be trivial with a doubly-linked list) to squash together
+    // but also we may have to fix the first_free invariant (which could be done faster by comparing addresses)
+    // but I'm lazy (for now), let's do a simple & stupid O(n) linked list travesal
+    ftr->first_free = nullptr;
+    for (block *blk = (block *)_base; blk; blk = blk->next) {
+        blk->check(); // too defensive?
+        if (!blk->free)
+            continue;
+        if (!ftr->first_free)
+            ftr->first_free = blk;
+        while (blk->next && blk->next->free) {
+            block *to_squash = blk->next;
+            to_squash->check(); // only paranoid survive
+            blk->next = to_squash->next;
+            blk->size += sizeof(block) + to_squash->size;
+        }
+    }
+}
 
 /**
  * TODO: semantics

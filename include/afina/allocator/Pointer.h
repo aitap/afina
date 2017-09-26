@@ -8,6 +8,8 @@ namespace Allocator {
 class Simple;
 
 class Pointer {
+    friend class Simple;
+
 public:
     Pointer(void **ptr = nullptr);
 

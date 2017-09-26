@@ -110,13 +110,10 @@ TEST(SimpleTest, AllocReuse) {
     int size = 135;
 
     ASSERT_TRUE(fillUp(a, size, ptrs));
-	std::cout << a.dump();
     a.free(ptrs[1]);
-	std::cout << a.dump();
 
     EXPECT_EQ(ptrs[1].get(), nullptr);
     ptrs[1] = a.alloc(size);
-	std::cout << a.dump();
 
     EXPECT_NE(ptrs[1].get(), nullptr);
     writeTo(ptrs[1], size);
@@ -124,7 +121,6 @@ TEST(SimpleTest, AllocReuse) {
     for (Pointer &p : ptrs) {
         EXPECT_TRUE(isDataOk(p, size));
         a.free(p);
-		std::cout << a.dump();
     }
 }
 
@@ -150,7 +146,9 @@ TEST(SimpleTest, DefragMove) {
         EXPECT_TRUE(r.second);
     }
 
+	std::cout << a.dump();
     a.defrag();
+	std::cout << a.dump();
 
     bool moved = false;
     for (Pointer &p : ptrs) {
