@@ -222,7 +222,8 @@ void Simple::defrag() {
             for (size_t i = 1; i <= ftr->max_allocated; i++)
                 if (*((void **)ftr - i) == (char *)blk->next + sizeof(block)) {
                     found = true;
-                    *((void **)ftr - i) = blk;
+                    *((void **)ftr - i) = (char *)blk + sizeof(block);
+                    break;
                 }
 
             if (!found)
@@ -245,13 +246,13 @@ void Simple::defrag() {
          ...|BLKA=DATA=|BLKF==|...
                 \___->__/  \_>_/
          */
-        if (blk->next) {
-            blk->next = new ((char *)blk + blk->size + sizeof(block))
-                block{(char *)blk->next - (char *)blk - 2 * sizeof(block) - blk->size, blk->next};
-        } else { // what if the former next block was the last?
-            blk->next = new ((char *)blk + blk->size + sizeof(block))
-                block{(char *)ftr - (char *)blk - 2 * sizeof(block) - blk->size - sizeof(void *) * ftr->max_allocated};
-        }
+        blk->next = new ((char *)blk + blk->size + sizeof(block)) block{
+            // if there's a next block, size it relative to that
+            blk->next
+                ? ((char *)blk->next - (char *)blk - 2 * sizeof(block) - blk->size)
+                // otherwise, get the size from the footer address
+                : ((char *)ftr - (char *)blk - 2 * sizeof(block) - blk->size - sizeof(void *) * ftr->max_allocated),
+            blk->next};
     }
 }
 
