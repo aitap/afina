@@ -11,7 +11,7 @@ Pointer::Pointer(Pointer &&p_) = default;
 Pointer &Pointer::operator=(const Pointer &p_) = default;
 Pointer &Pointer::operator=(Pointer &&p_) = default;
 
-void *Pointer::get() const { return *ptr; }
+void *Pointer::get() const { if (ptr) return *ptr; else return nullptr; }
 
 } // namespace Allocator
 } // namespace Afina
