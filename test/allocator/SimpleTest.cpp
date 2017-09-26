@@ -13,13 +13,11 @@ char buf[65536];
 
 TEST(SimpleTest, AllocInRange) {
     Simple a(buf, sizeof(buf));
-	std::cout << a.dump();
 
     int size = 500;
 
     Pointer p = a.alloc(size);
     char *v = reinterpret_cast<char *>(p.get());
-	std::cout << a.dump();
 
     EXPECT_GE(v, buf);
     EXPECT_LE(v + size, buf + sizeof(buf));
@@ -112,10 +110,13 @@ TEST(SimpleTest, AllocReuse) {
     int size = 135;
 
     ASSERT_TRUE(fillUp(a, size, ptrs));
+	std::cout << a.dump();
     a.free(ptrs[1]);
+	std::cout << a.dump();
 
     EXPECT_EQ(ptrs[1].get(), nullptr);
     ptrs[1] = a.alloc(size);
+	std::cout << a.dump();
 
     EXPECT_NE(ptrs[1].get(), nullptr);
     writeTo(ptrs[1], size);
@@ -123,6 +124,7 @@ TEST(SimpleTest, AllocReuse) {
     for (Pointer &p : ptrs) {
         EXPECT_TRUE(isDataOk(p, size));
         a.free(p);
+		std::cout << a.dump();
     }
 }
 

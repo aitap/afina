@@ -1,3 +1,9 @@
+/*
+ BIG FAT DISCLAIMER
+ This allocator doesn't give a damn about alignment requirements.
+ Expect undefined behaviour on anything that doesn't allow unaligned access.
+*/
+
 #include <afina/allocator/Error.h>
 #include <afina/allocator/Pointer.h>
 #include <afina/allocator/Simple.h>
@@ -31,7 +37,7 @@ struct footer {
     std::uint32_t magic;
     block *first_free, *last;
     std::size_t max_allocated;
-    footer(void *base) : magic(footer_magic), first_free((block *)base), last((block *)base), max_allocated(1){};
+    footer(void *base) : magic(footer_magic), first_free((block *)base), last((block *)base), max_allocated(0){};
     void check() const {
         if (magic != footer_magic)
             throw AllocError{AllocErrorType::CorruptionDetected, "Corruption found in footer"};
@@ -43,13 +49,9 @@ Simple::Simple(void *base, size_t size) : _base(base), _base_len(size) {
     assert(size > sizeof(block) + sizeof(footer));
     /* Leave enough space for:
      * - the block descriptor
-     * - the footer at the end of the memory area
-     * - one void* to point at the allocated block */
-    block *head = new (base) block{size - sizeof(footer) - sizeof(footer) - sizeof(void *)};
+     * - the footer at the end of the memory area */
+    block *head = new (base) block{size - sizeof(footer) - sizeof(block)};
     footer *ftr = new ((char *)base + size - sizeof(footer)) footer{base};
-    // fill the only preallocated pointer-to-pointer as unallocated
-    void **pptr = (void **)(ftr)-1;
-    *pptr = nullptr;
 }
 
 /**
@@ -68,9 +70,14 @@ Pointer Simple::alloc(size_t N) {
             break;
         }
     }
-    if (pptr == (void **)ftr) { // all pointer slots are occupied
-        assert(0);              // for now
-                                // TODO: reduce the last block if it's free or bail out
+    if (pptr == (void **)ftr) { // all pointer slots are occupied => reduce the last block
+        ftr->last->check();     // constant vigilance!
+        if (!ftr->last->free || ftr->last->size < sizeof(void *))
+            throw AllocError{AllocErrorType::NoMemory, "Couldn't extend the pointer array"};
+        ftr->last->size -= sizeof(void *); // reluctantly allocate one more slot
+        ftr->max_allocated++;
+        pptr -= ftr->max_allocated;
+        *pptr = nullptr;
     }
 
     // now find a free block
@@ -79,16 +86,33 @@ Pointer Simple::alloc(size_t N) {
         if (free_block->size < N) // not big enough for the caller's taste
             continue;
         free_block->free = false;
-        if (free_block->size - N < sizeof(block)) { // split off another free block and store it
-                                                    // TODO
-        } else {                                    // store pointer to another free block
+        if (free_block->size - N > 2 * sizeof(block)) { // it's feasible to split off another block
+            block *new_block = new ((char *)free_block + sizeof(block) + N)
+                block{free_block->size - N - sizeof(block), free_block->next};
+                                                        /*
+                                                         |BLOCK|================= size ================================|
+                                            
+                                                          _ free_block      _ free_block + sizeof(block) + N
+                                                         /                 /
+                                                         |BLOCK|==== N ====|BLOCK|=== size - N - sizeof(block) ========|
+                                                               |
+                                                               \_ free_block+sizeof(block)
+                                                        */
+            free_block->next = new_block;
+            free_block->size = N;
+            if (free_block == ftr->last) // well, it isn't last anymore
+                ftr->last = free_block->next;
+        }
+        if (free_block == ftr->first_free) // now it isn't free anymore either
             for (ftr->first_free = free_block->next; ftr->first_free; ftr->first_free = ftr->first_free->next)
                 if (ftr->first_free->free)
-                    break; // otherwise it stops at nullptr which is also okay
-        }
-        *pptr = (void *)(&free_block->next + 1);
+                    break;                                    // it may stop at nullptr which is also okay
+        *pptr = (void *)((char *)free_block + sizeof(block)); // pointer past the end
         return Pointer(pptr);
     }
+    // clean up exceccive pointer slots, if any
+    while (!*((void **)ftr - ftr->max_allocated) && ftr->max_allocated)
+        ftr->max_allocated--;
     // we're still here?
     throw AllocError{AllocErrorType::NoMemory, "Couldn't find a suitable free memory block"};
 }
