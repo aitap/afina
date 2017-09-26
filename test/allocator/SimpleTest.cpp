@@ -146,9 +146,7 @@ TEST(SimpleTest, DefragMove) {
         EXPECT_TRUE(r.second);
     }
 
-	std::cout << a.dump();
     a.defrag();
-	std::cout << a.dump();
 
     bool moved = false;
     for (Pointer &p : ptrs) {
@@ -209,7 +207,7 @@ TEST(SimpleTest, DefragAvailable) {
     ptrs.erase(ptrs.begin() + 1);
 
     try {
-        Pointer p = a.alloc(size * 2);
+        Pointer p = a.alloc(size * 6);
         a.free(p);
 
         cerr << "WARNING: Allocator not fragmented initially. Defrag tests are inconclusive." << endl;

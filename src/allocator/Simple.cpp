@@ -9,7 +9,7 @@
 #include <afina/allocator/Simple.h>
 
 #include <cassert> // not supplying enough memory to the constructor will kill the program
-#include <cstring> // std::memmove
+#include <cstring> // std::memmove, memcpy
 #include <memory>
 #include <sstream> // building strings in style
 
@@ -25,9 +25,9 @@ struct block; // of course they depend on each other
 // lives at fixed offset, contains global info about our allocator
 struct footer {
     std::uint32_t magic;
-    block *first_free, *last;
+    block *last;
     size_t max_allocated;
-    footer(void *base) : magic(footer_magic), first_free((block *)base), last((block *)base), max_allocated(0){};
+    footer(void *base) : magic(footer_magic), last((block *)base), max_allocated(0){};
     void check() const {
         if (magic != footer_magic)
             throw AllocError{AllocErrorType::CorruptionDetected, "Corruption found in footer"};
@@ -56,6 +56,38 @@ struct block {
         }
         if (!next)
             ftr->last = this; // don't break the pointer to the last block
+    }
+
+    void maybe_split_off(size_t N, footer *ftr) {
+        /*
+         |BLOCK|================= size ===========================|
+
+          _ free_block      _ free_block + sizeof(block) + N
+         /                 /
+         |BLOCK|==== N ====|BLOCK|=== size - N - sizeof(block) ===|
+                   |
+                   \_ free_block+sizeof(block)
+        */
+        if (size - N < 2 * sizeof(block))
+            return; // you've got to be kidding me
+        next = new ((char *)this + N + sizeof(block)) block{size - N - sizeof(block), next};
+        if (this == ftr->last) // well, it isn't last anymore
+            ftr->last = next;
+        size = N;
+        next->squash_next_free(ftr);
+    }
+
+    block *find_free_block(size_t N, footer *ftr) {
+        for (block *blk = this; blk; blk = blk->next) {
+            blk->check(); // better safe than sorry
+            if (!blk->free || blk->size < N)
+                continue;
+            // found it!
+            blk->free = false;
+            blk->maybe_split_off(N, ftr);
+            return blk;
+        }
+        return nullptr;
     }
 };
 
@@ -106,48 +138,47 @@ Pointer Simple::alloc(size_t N) {
         *pptr = nullptr;
     }
 
-    // now find a free block (TODO: this should probably be a block method?)
-    for (block *free_block = ftr->first_free; free_block; free_block = free_block->next) {
-        free_block->check();      // better safe than sorry
-        if (free_block->size < N) // not big enough for the caller's taste
-            continue;
-        free_block->free = false;
-        if (free_block->size - N > 2 * sizeof(block)) { // it's feasible to split off another block
-            block *new_block = new ((char *)free_block + sizeof(block) + N)
-                block{free_block->size - N - sizeof(block), free_block->next};
-            /*
-             |BLOCK|================= size ================================|
-
-              _ free_block      _ free_block + sizeof(block) + N
-             /                 /
-             |BLOCK|==== N ====|BLOCK|=== size - N - sizeof(block) ========|
-                   |
-                   \_ free_block+sizeof(block)
-            */
-            free_block->next = new_block;
-            free_block->size = N;
-            if (free_block == ftr->last) // well, it isn't last anymore
-                ftr->last = free_block->next;
-        }
-        if (free_block == ftr->first_free) // now it isn't free anymore either
-            for (ftr->first_free = free_block->next; ftr->first_free; ftr->first_free = ftr->first_free->next)
-                if (ftr->first_free->free)
-                    break;                                    // it may stop at nullptr which is also okay
-        *pptr = (void *)((char *)free_block + sizeof(block)); // pointer past the end
-        return Pointer(pptr);
+    block *free_block = ((block *)_base)->find_free_block(N, ftr);
+    if (!free_block) {
+        defrag();
+        free_block = ((block *)_base)->find_free_block(N, ftr);
     }
-    // TODO: defrag and try again
-    ftr->cleanup_pointer_slots();
-    // we're still here?
-    throw AllocError{AllocErrorType::NoMemory, "Couldn't find a suitable free memory block"};
+    if (!free_block) {
+        ftr->cleanup_pointer_slots();
+        throw AllocError{AllocErrorType::NoMemory, "Couldn't find a suitable free memory block"};
+    }
+
+    *pptr = (void *)((char *)free_block + sizeof(block)); // pointer past the end
+    return Pointer(pptr);
 }
 
 /**
- * TODO: semantics
  * @param p Pointer
  * @param N size_t
  */
-void Simple::realloc(Pointer &p, size_t N) {}
+void Simple::realloc(Pointer &p, size_t N) {
+    if (!p.ptr) { // easy: this is a fancy alloc
+        p = alloc(N);
+        return;
+    }
+    block *blk = (block *)((char *)*p.ptr - sizeof(block));
+    footer *ftr = (footer *)((char *)_base + _base_len - sizeof(footer));
+    blk->check();
+    ftr->check();
+    if (blk->size >= N) { // maybe shrinking?
+        blk->maybe_split_off(N, ftr);
+    } else {                                                                    // oh well, we must enlarge
+        if (blk->next && blk->next->free && blk->next->size + blk->size >= N) { // lucky?
+            blk->squash_next_free(ftr);
+            blk->maybe_split_off(N, ftr);
+        } else { // oh well, let's get moving
+            Pointer new_p = alloc(N);
+            std::memcpy(new_p.get(), p.get(), blk->size);
+            free(p);
+            p = new_p;
+        }
+    }
+}
 
 /**
  * @param p Pointer
@@ -172,15 +203,11 @@ void Simple::free(Pointer &p) {
     // now the interesting part: linked list
     to_free->free = true;
     // there might be a free block before this (check could be trivial with a doubly-linked list) to squash together
-    // but also we may have to fix the first_free invariant (which could be done faster by comparing addresses)
     // but I'm lazy (for now), let's do a simple & stupid O(n) linked list travesal
-    ftr->first_free = nullptr;
     for (block *blk = (block *)_base; blk; blk = blk->next) {
         blk->check(); // too defensive?
         if (!blk->free)
             continue;
-        if (!ftr->first_free)
-            ftr->first_free = blk;
         blk->squash_next_free(ftr);
     }
 }
@@ -199,7 +226,7 @@ void Simple::defrag() {
       V                V                V                  \||
      |BLKA=123=|BLKF==|BLKA=45=|BLKF===|BLKA=6789=|BLKF===|PPP|FOOTER|
       |          ______|  ______________|
-      |         |        |
+      |         |        |                    <-- memmove
       V         V        V
      |BLKA=123=|BLKA=45=|BLKA=6789=|BLKF==================|PPP|FOOTER|
       ^         ^        ^                                 |||
@@ -210,7 +237,7 @@ void Simple::defrag() {
     for (block *blk = (block *)_base; blk->next /* no point touching the last block */; blk = blk->next) {
         if (!blk->free)
             continue;
-        // this block is free => squash any following free blocks (we might have created on previous iteration) together
+        // this block is free => squash any following free blocks (we might have created earlier) together
         blk->squash_next_free(ftr);
         if (!blk->next) { // reached the end by squashing
             break;        // our job here is done
@@ -256,17 +283,13 @@ void Simple::defrag() {
     }
 }
 
-/**
- * TODO: semantics
- */
 std::string Simple::dump() const {
     using std::endl;
     std::stringstream ret;
     ret << "Start=" << _base << ", size=" << _base_len << endl;
 
     footer *ftr = (footer *)((char *)_base + _base_len - sizeof(footer));
-    ret << "Footer=" << (void *)ftr << ", first free @" << (void *)ftr->first_free << ", last @" << (void *)ftr->last
-        << ", max_allocated=" << ftr->max_allocated;
+    ret << "Footer=" << (void *)ftr << ", last @" << (void *)ftr->last << ", max_allocated=" << ftr->max_allocated;
     try {
         ftr->check();
         ret << " (magic OK)";
