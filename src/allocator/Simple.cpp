@@ -9,6 +9,7 @@
 #include <afina/allocator/Simple.h>
 
 #include <cassert> // not supplying enough memory to the constructor will kill the program
+#include <cstring> // std::memmove
 #include <memory>
 #include <sstream> // building strings in style
 
@@ -19,39 +20,55 @@ namespace Allocator {
 // NOTE: the highest bit of block_magic should be 0 to account for the truncation later
 static const std::uint32_t block_magic = 0x7700e698, footer_magic = 0xe26ab656;
 
-// header for a memory block
-struct block {
-    std::uint32_t magic : 31; // 31-bit uint32! shock, horrors!
-    bool free : 1;
-    std::size_t size;
-    block *next;
-    void check() const {
-        if (magic != block_magic)
-            throw AllocError{AllocErrorType::CorruptionDetected, "Corruption found in block"};
-    }
-    block(std::size_t size_, block *next_ = nullptr) : magic(block_magic), free(true), size(size_), next(next_){};
-};
+struct block; // of course they depend on each other
 
 // lives at fixed offset, contains global info about our allocator
 struct footer {
     std::uint32_t magic;
     block *first_free, *last;
-    std::size_t max_allocated;
+    size_t max_allocated;
     footer(void *base) : magic(footer_magic), first_free((block *)base), last((block *)base), max_allocated(0){};
     void check() const {
         if (magic != footer_magic)
             throw AllocError{AllocErrorType::CorruptionDetected, "Corruption found in footer"};
     }
-    void cleanup_pointer_slots() {
-        // decrement max_allocated if there are nullptr at the end of pointer array
-        while (!*((void **)this - max_allocated) && max_allocated) {
-            max_allocated--;
-            // adjust the size of the last block accordingly
-            // even if it's occupied, so what? I only extend it anyway
-            last->size += sizeof(void *);
+    void cleanup_pointer_slots();
+};
+
+// header for a memory block
+struct block {
+    std::uint32_t magic : 31; // 31-bit uint32! shock, horrors!
+    bool free : 1;
+    size_t size;
+    block *next;
+    block(size_t size_, block *next_ = nullptr) : magic(block_magic), free(true), size(size_), next(next_){};
+    void check() const {
+        if (magic != block_magic)
+            throw AllocError{AllocErrorType::CorruptionDetected, "Corruption found in block"};
+    }
+    void squash_next_free(footer *ftr) {
+        check();
+        while (next && next->free) {
+            block *to_squash = next;
+            to_squash->check(); // only paranoid survive
+            next = to_squash->next;
+            size += sizeof(block) + to_squash->size;
         }
+        if (!next)
+            ftr->last = this; // don't break the pointer to the last block
     }
 };
+
+void footer::cleanup_pointer_slots() {
+    check();
+    // decrement max_allocated if there are nullptr at the end of pointer array
+    while (!*((void **)this - max_allocated) && max_allocated) {
+        max_allocated--;
+        // adjust the size of the last block accordingly
+        // even if it's occupied, so what? I only extend it anyway
+        last->size += sizeof(void *);
+    }
+}
 
 Simple::Simple(void *base, size_t size) : _base(base), _base_len(size) {
     // they told me not to throw from constructor, so I didn't
@@ -73,8 +90,8 @@ Pointer Simple::alloc(size_t N) {
 
     // find space in the pointer list
     void **pptr = (void **)ftr;
-    for (std::size_t i = 1; i <= ftr->max_allocated; i++) { // traverse the already allocated slots
-        if (!pptr[-i]) {                                    // we're lucky: there's a free pointer slot for us
+    for (size_t i = 1; i <= ftr->max_allocated; i++) { // traverse the already allocated slots
+        if (!pptr[-i]) {                               // we're lucky: there's a free pointer slot for us
             pptr = pptr - i;
             break;
         }
@@ -164,19 +181,79 @@ void Simple::free(Pointer &p) {
             continue;
         if (!ftr->first_free)
             ftr->first_free = blk;
-        while (blk->next && blk->next->free) {
-            block *to_squash = blk->next;
-            to_squash->check(); // only paranoid survive
-            blk->next = to_squash->next;
-            blk->size += sizeof(block) + to_squash->size;
-        }
+        blk->squash_next_free(ftr);
     }
 }
 
-/**
- * TODO: semantics
- */
-void Simple::defrag() {}
+// NOTE: sane memmove() implementations don't allocate anything. I checked.
+// They only behave *AS THOUGH* copying was done through a temporary non-overlapping array.
+
+void Simple::defrag() {
+    footer *ftr = (footer *)((char *)_base + _base_len - sizeof(footer));
+    // of course I would
+    ftr->check();
+    /*
+       ______________________________________________________
+      /                 ____________________________________ \
+      |                /                 __________________ \|
+      V                V                V                  \||
+     |BLKA=123=|BLKF==|BLKA=45=|BLKF===|BLKA=6789=|BLKF===|PPP|FOOTER|
+      |          ______|  ______________|
+      |         |        |
+      V         V        V
+     |BLKA=123=|BLKA=45=|BLKA=6789=|BLKF==================|PPP|FOOTER|
+          ^         ^        ^                                 |||
+          |         |        \_________________________________/||
+          |         \___________________________________________/|
+          \______________________________________________________/
+    */
+    for (block *blk = (block *)_base; blk->next /* no point touching the last block */; blk = blk->next) {
+        if (!blk->free)
+            continue;
+        // this block is free => squash any following free blocks (we might have created on previous iteration) together
+        blk->squash_next_free(ftr);
+        if (!blk->next) { // reached the end by squashing
+            break;        // our job here is done
+        }
+        // next one is occupied => prepare for the move
+        // update the pointer array
+        {
+            bool found = false;
+            for (size_t i = 1; i <= ftr->max_allocated; i++)
+                if (*((void **)ftr - i) == (char *)blk->next + sizeof(block)) {
+                    found = true;
+                    *((void **)ftr - i) = blk;
+                }
+
+            if (!found)
+                throw AllocError{AllocErrorType::CorruptionDetected, "Coundn't find pointer to the block being moved"};
+        }
+        // make sure not to break the pointer to last block
+        if (blk->next == ftr->last)
+            ftr->last = blk;
+        // do the move
+        std::memmove(blk, blk->next, sizeof(block) + blk->next->size);
+        /* now blk is the occupied block but it has wrong size
+         ...|BLKF==|BLKA=DATA=|...
+              _move_|  |       ^
+             |         \__next_/
+             V
+         ...|BLKA=DATA=???????|...
+                |              ^
+                \________next__/
+         * what should we do? create a free block and let the loop do its magic, of course!
+         ...|BLKA=DATA=|BLKF==|...
+                \___->__/  \_>_/
+         */
+        if (blk->next) {
+            blk->next = new ((char *)blk + blk->size + sizeof(block))
+                block{(char *)blk->next - (char *)blk - 2 * sizeof(block) - blk->size, blk->next};
+        } else { // what if the former next block was the last?
+            blk->next = new ((char *)blk + blk->size + sizeof(block))
+                block{(char *)ftr - (char *)blk - 2 * sizeof(block) - blk->size - sizeof(void *) * ftr->max_allocated};
+        }
+    }
+}
 
 /**
  * TODO: semantics
@@ -201,7 +278,7 @@ std::string Simple::dump() const {
     // decrement for each allocated from linked list
     std::ptrdiff_t zero_check = 0;
     {
-        std::size_t num_allocated = ftr->max_allocated;
+        size_t num_allocated = ftr->max_allocated;
         for (void **pptr = (void **)(ftr)-1; /* Start at the first pointer */
              num_allocated;                  /* Check if we have any more pointers */
              pptr--, num_allocated--) {
@@ -222,6 +299,10 @@ std::string Simple::dump() const {
         } catch (AllocError &e) {
             ret << " !!! invalid magic !!!";
         }
+        ret << ((!blk->next)
+                    ? " (last)"
+                    : ((char *)blk->next == (char *)blk + blk->size + sizeof(block)) ? " (size OK)"
+                                                                                     : " !!! size NOT OKAY !!!");
         ret << endl;
         if (!blk->free)
             zero_check--;
