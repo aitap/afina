@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
 
     uv_signal_t sig;
     uv_signal_init(&loop, &sig);
-    uv_signal_start(&sig, signal_handler, SIGTERM | SIGKILL);
+    uv_signal_start(&sig, signal_handler, SIGTERM | SIGINT);
     sig.data = &app;
 
     uv_timer_t timer;
