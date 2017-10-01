@@ -207,7 +207,7 @@ TEST(SimpleTest, DefragAvailable) {
     ptrs.erase(ptrs.begin() + 1);
 
     try {
-        Pointer p = a.alloc(size * 6);
+        Pointer p = a.alloc(size * 2);
         a.free(p);
 
         cerr << "WARNING: Allocator not fragmented initially. Defrag tests are inconclusive." << endl;
