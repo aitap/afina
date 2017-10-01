@@ -1,10 +1,11 @@
 #ifndef AFINA_STORAGE_MAP_BASED_GLOBAL_LOCK_IMPL_H
 #define AFINA_STORAGE_MAP_BASED_GLOBAL_LOCK_IMPL_H
 
-#include <deque>
-#include <map>
+#include <list>
 #include <mutex>
 #include <string>
+#include <unordered_map>
+#include <utility>
 
 #include <afina/Storage.h>
 
@@ -37,12 +38,12 @@ public:
     bool Get(const std::string &key, std::string &value) const override;
 
 private:
-    mutable std::mutex _lock;
+    mutable std::recursive_mutex _lock;
 
     size_t _max_size;
 
-    std::map<std::string, std::string> _backend;
-    std::deque<std::string> _queue;
+    std::list<std::pair<std::string, std::string>> storage;
+    std::unordered_map<std::string, std::list<std::pair<std::string, std::string>>::iterator> hash;
 };
 
 } // namespace Backend
