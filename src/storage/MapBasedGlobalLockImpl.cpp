@@ -18,7 +18,7 @@ bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &valu
         _queue.pop_front();
     }
     _backend[key] = value;
-    return ret; // I *guess* it should return whether there was an element?
+    return ret; // return whether there was an element before
 }
 
 // See MapBasedGlobalLockImpl.h
@@ -55,7 +55,7 @@ bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &valu
     auto it = _backend.find(key);
     if (it == _backend.end())
         return false;
-    // I guess "Set" refreshes the key?
+    // "Set" refreshes the key, like PutIfAbsent but otherwise
     _queue.erase(std::find(_queue.begin(), _queue.end(), key));
     _queue.push_back(key);
     _backend[key] = value;
@@ -66,7 +66,7 @@ bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &valu
 bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
     std::lock_guard<std::mutex> lock(_lock);
     _queue.erase(std::find(_queue.begin(), _queue.end(), key));
-    // I *guess* it should return if the key was present in the first place?
+    // return if the key was present in the first place
     return _backend.erase(key);
 }
 
