@@ -184,6 +184,8 @@ void Simple::realloc(Pointer &p, size_t N) {
  * @param p Pointer
  */
 void Simple::free(Pointer &p) {
+    if (!p.ptr)
+        throw AllocError{AllocErrorType::InvalidFree, "Trying to free a null pointer"};
     block *to_free = (block *)((char *)p.get() - sizeof(block));
     try {
         to_free->check();
