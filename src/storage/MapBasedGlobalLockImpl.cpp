@@ -1,6 +1,8 @@
 #include "MapBasedGlobalLockImpl.h"
 #include <algorithm>
 
+#include <mutex>
+
 namespace Afina {
 namespace Backend {
 
