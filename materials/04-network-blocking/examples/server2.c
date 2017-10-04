@@ -48,6 +48,8 @@ int main()
                 else
                     printf("-->%s\n", str);
             } while( rval > 0);
+
+            return 0;
         }
 
         close( SlaveSock );
