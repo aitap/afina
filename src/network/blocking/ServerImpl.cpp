@@ -23,14 +23,17 @@ namespace Afina {
 namespace Network {
 namespace Blocking {
 
-void *ServerImpl::RunAcceptorProxy(void *p) {
+template <void (ServerImpl::*method)()> static void *PthreadProxy(void *p) {
     ServerImpl *srv = reinterpret_cast<ServerImpl *>(p);
     try {
-        srv->RunAcceptor();
+        (srv->*method)();
+        return (void *)0;
     } catch (std::runtime_error &ex) {
-        std::cerr << "Server fails: " << ex.what() << std::endl;
+        std::cerr << "Exception caught" << ex.what() << std::endl;
+        return (void *)-1;
     }
-    return 0;
+    // different return values may be used to motify whoever calls pthread_join
+    // of error conditions
 }
 
 // See Server.h
@@ -82,7 +85,7 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
     // since there will only be one server thread, and the program's main thread (the
     // one running main()) could fulfill this purpose.
     running.store(true);
-    if (pthread_create(&accept_thread, NULL, ServerImpl::RunAcceptorProxy, this) < 0) {
+    if (pthread_create(&accept_thread, NULL, &PthreadProxy<&ServerImpl::RunAcceptor>, this) < 0) {
         throw std::runtime_error("Could not create server thread");
     }
 }
@@ -116,7 +119,7 @@ void ServerImpl::RunAcceptor() {
     struct sockaddr_in server_addr;
     std::memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;          // IPv4
-    server_addr.sin_port = htons(listen_port); // TCP port number
+    server_addr.sin_port = htons(listen_port); // TCP port number, downcasted from 32-bit to 16-bit type
     server_addr.sin_addr.s_addr = INADDR_ANY;  // Bind to any address
 
     // Arguments are:
@@ -171,14 +174,9 @@ void ServerImpl::RunAcceptor() {
         }
 
         // TODO: Start new thread and process data from/to connection
-        {
-            std::string msg = "TODO: start new thread and process memcached protocol instead";
-            if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
-                close(client_socket);
-                close(server_socket);
-                throw std::runtime_error("Socket send() failed");
-            }
-            close(client_socket);
+        pthread_t client_thread;
+        if (pthread_create(&accept_thread, NULL, PthreadProxy<&ServerImpl::RunConnection>, this) < 0) {
+            throw; // FIXME: do something meaningful
         }
     }
 
@@ -187,7 +185,10 @@ void ServerImpl::RunAcceptor() {
 }
 
 // See Server.h
-void ServerImpl::RunConnection() { std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl; }
+void ServerImpl::RunConnection() {
+    std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+    // FIXME: handle the connection
+}
 
 } // namespace Blocking
 } // namespace Network
