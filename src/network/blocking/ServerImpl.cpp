@@ -31,7 +31,7 @@ template <void (ServerImpl::*method)()> static void *PthreadProxy(void *p) {
         (srv->*method)();
         return (void *)0;
     } catch (std::runtime_error &ex) {
-        std::cerr << "Exception caught" << ex.what() << std::endl;
+        std::cerr << "Exception caught: " << ex.what() << std::endl;
         return (void *)-1;
     }
     // different return values may be used to motify whoever calls pthread_join
@@ -70,9 +70,6 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
     // variable value visibility
     max_workers = n_workers;
     listen_port = port;
-    // NOTE: Actually, this doesn't guarantee the visibility because of per-core cache.
-    // Stricty speaking, we should issue a memory barrier before creating a new thread.
-    // Waiting on a mutex does that for us.
 
     // The pthread_create function creates a new thread.
     //
@@ -116,7 +113,7 @@ void ServerImpl::Join() {
     if (pthread_join(accept_thread, &retval))
         throw std::runtime_error("pthread_join failed");
     if (retval) // better late than never
-        throw std::runtime_error("server thread encountered an error");
+        throw std::runtime_error("server thread had encountered an error");
 }
 
 // See Server.h
@@ -227,9 +224,13 @@ void ServerImpl::RunAcceptor() {
         if (pthread_cond_wait(&client_socket_cv,
                               &client_socket_lock)) // make sure that the client thread gets the socket
             throw std::runtime_error("couldn't wait on client socket condvar");
+        // NOTE: this may still fail because of spurious wakeups.
+        // The best way to be sure would be to add a boolean flag which this method would set to false
+        // and wait for it to become true in a while loop
     }
 
     // Cleanup on exit...
+    shutdown(server_socket, SHUT_RDWR);
     close(server_socket);
 
     if (pthread_mutex_unlock(&client_socket_lock))
@@ -246,7 +247,7 @@ void ServerImpl::RunAcceptor() {
 }
 
 // better test with a really small buffer to catch possible errors
-static const size_t read_buffer_size = 16;
+static const size_t read_buffer_size = 256;
 
 // See Server.h
 void ServerImpl::RunConnection() {
@@ -278,6 +279,7 @@ void ServerImpl::RunConnection() {
                 // append whatever the client may have sent
                 received = recv(client, buf.data(), buf.capacity() - received + parsed, 0);
                 if (received <= 0) { // client bails out, no command to execute
+                    shutdown(client, SHUT_RDWR);
                     close(client);
                     return;
                 }
@@ -303,6 +305,7 @@ void ServerImpl::RunConnection() {
                 while (offset < arg_size) { // append the body we know the size of
                     received = recv(client, buf.data() + offset, buf.capacity() - offset, 0);
                     if (received <= 0) { // client bails out, no data to store
+                        shutdown(client, SHUT_RDWR);
                         close(client);
                         return;
                     }
@@ -326,6 +329,7 @@ void ServerImpl::RunConnection() {
             while (offset < out.size()) { // classical "send until nothing left or error" loop
                 sent = send(client, out.data() + offset, out.size() - offset, 0);
                 if (sent <= 0) { // client bails out, reply not sent
+                    shutdown(client, SHUT_RDWR);
                     close(client);
                     return;
                 }
