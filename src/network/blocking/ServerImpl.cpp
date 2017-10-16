@@ -18,6 +18,8 @@
 #include <unistd.h>
 
 #include <afina/Storage.h>
+#include <afina/execute/Command.h>
+#include <protocol/Parser.h>
 
 namespace Afina {
 namespace Network {
@@ -62,6 +64,8 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
         throw std::runtime_error("Unable to mask SIGPIPE");
     }
 
+    if ((uint16_t)port != port)
+        throw std::overflow_error("port wouldn't fit in a 16-bit value");
     // Setup server parameters BEFORE thread is created, that will guarantee
     // variable value visibility
     max_workers = n_workers;
@@ -240,6 +244,9 @@ void ServerImpl::RunAcceptor() {
     }
 }
 
+// better test with a really small buffer to catch possible errors
+static const size_t read_buffer_size = 16;
+
 // See Server.h
 void ServerImpl::RunConnection() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
@@ -251,6 +258,86 @@ void ServerImpl::RunConnection() {
         throw std::runtime_error("couldn't signal client socket condvar");
     if (pthread_mutex_unlock(&client_socket_lock))
         throw std::runtime_error("couldn't unlock client socket mutex");
+
+    Afina::Protocol::Parser parser;
+
+    for (;;) { // the loop ends when recv()/send() fails
+        std::vector<char> buf;
+        buf.reserve(read_buffer_size);
+
+        // both parser and command may throw exceptions
+        std::string out;
+        try {
+            // first, read & parse the command
+            ssize_t received = 0;
+            size_t parsed = 0;
+            do {
+                // move excess data to the beginning of the buffer
+                memmove(buf.data(), buf.data() + parsed, received - parsed);
+                // append whatever the client may have sent
+                received = recv(client, buf.data(), buf.capacity() - received + parsed, 0);
+                if (received <= 0) { // client bails out, no command to execute
+                    close(client);
+                    std::cout << "network debug: client " << client
+                              << " neglected to send command, buf:" << std::string(buf.data(), buf.size()) << std::endl;
+                    return;
+                }
+            } while (!parser.Parse(buf.data(), received, parsed));
+
+            // parser.Parse returned true -- can build a command now
+            uint32_t arg_size;
+            auto cmd = parser.Build(arg_size);
+
+            std::string arg;
+            // was there an argument?
+            if (arg_size) {
+                arg_size += 2; // data is followed by \r\n
+                buf.reserve(arg_size);
+
+                size_t offset = 0;
+                if (received - parsed) { // was there any excess?
+                    // as usual, move it to the beginning
+                    memmove(buf.data(), buf.data() + parsed, received - parsed);
+                    offset += received - parsed; // and account for it
+                }
+
+                while (offset < arg_size) { // append the body we know the size of
+                    received = recv(client, buf.data() + offset, buf.capacity() - offset, 0);
+                    if (received <= 0) { // client bails out, no data to store
+                        close(client);
+                        std::cout << "network debug: client " << client
+                                  << " neglected to send data, buf:" << std::string(buf.data(), buf.size())
+                                  << std::endl;
+                        return;
+                    }
+                    offset += received;
+                }
+                // prepare the body
+                arg.assign(buf.data(), offset - 2 /* account for extra \r\n */);
+            }
+
+            // time to do the deed
+            cmd->Execute(*pStorage, arg, out);
+        } catch (std::runtime_error &e) {
+            // if anything fails we just report the error to the user
+            out = std::string("CLIENT_ERROR ") + e.what();
+        }
+
+        if (out.size()) {
+            out += std::string("\r\n");
+            size_t offset = 0;
+            ssize_t sent;
+            while (offset < out.size()) { // classical "send until nothing left or error" loop
+                sent = send(client, out.data() + offset, out.size() - offset, 0);
+                if (sent <= 0) { // client bails out, reply not sent
+                    close(client);
+                    std::cout << "network debug: client " << client << " neglected to read reply" << std::endl;
+                    return;
+                }
+                offset += sent;
+            }
+        }
+    }
 }
 
 } // namespace Blocking

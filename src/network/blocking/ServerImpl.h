@@ -60,8 +60,6 @@ private:
     // NOTE: access is permitted only from inside of accept_thread
     std::vector<pthread_t> connections;
 
-    // XXX: why not make the following read-only variables const and initialize them in the constructor?
-
     // Maximum number of client allowed to exist concurrently
     // on the server
     // NOTE: access is permitted only from inside of accept_thread
