@@ -8,6 +8,19 @@
 namespace Afina {
 namespace Execute {
 
+/* memcached protocol:
+
+Each item sent by the server looks like this:
+
+VALUE <key> <flags> <bytes>\r\n
+<data block>\r\n
+
+After all the items have been transmitted, the server sends the string
+"END\r\n"
+to indicate the end of response.
+
+*/
+
 void Get::Execute(Storage &storage, const std::string &args, std::string &out) {
     std::stringstream keyStream;
     copy(_keys.begin(), _keys.end(), std::ostream_iterator<std::string>(keyStream, " "));
@@ -17,9 +30,12 @@ void Get::Execute(Storage &storage, const std::string &args, std::string &out) {
 
     std::string value;
     for (auto &key : _keys) {
-        storage.Get(key, value);
-        outStream << value << " ";
+        if (!storage.Get(key, value))
+            continue;
+        outStream << "VALUE " << key << " 0 " << value.size() << "\r\n";
+        outStream << value << "\r\n";
     }
+    outStream << "END\r\n";
 
     out = outStream.str();
 }
