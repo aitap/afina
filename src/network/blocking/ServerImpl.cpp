@@ -183,6 +183,15 @@ void ServerImpl::RunAcceptor() {
     if (pthread_mutex_lock(&client_socket_lock))
         throw std::runtime_error("couldn't lock client socket mutex");
     while (running.load()) {
+        std::cout << "network debug: waiting for connection..." << std::endl;
+
+        // When an incoming connection arrives, accept it. The call to accept() blocks until
+        // the incoming connection arrives
+        if ((client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &sinSize)) == -1) {
+            close(server_socket);
+            throw std::runtime_error("Socket accept() failed");
+        }
+
         // the requirement is: access the worker threads only from the accept_thread
         // so I do
         // this reaps the dead children to make space for more client connections
@@ -198,14 +207,6 @@ void ServerImpl::RunAcceptor() {
                 it = connections.erase(it);
             } else
                 ++it;
-        }
-        std::cout << "network debug: waiting for connection..." << std::endl;
-
-        // When an incoming connection arrives, accept it. The call to accept() blocks until
-        // the incoming connection arrives
-        if ((client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &sinSize)) == -1) {
-            close(server_socket);
-            throw std::runtime_error("Socket accept() failed");
         }
 
         if (connections.size() >= max_workers) {
@@ -278,8 +279,6 @@ void ServerImpl::RunConnection() {
                 received = recv(client, buf.data(), buf.capacity() - received + parsed, 0);
                 if (received <= 0) { // client bails out, no command to execute
                     close(client);
-                    std::cout << "network debug: client " << client
-                              << " neglected to send command, buf:" << std::string(buf.data(), buf.size()) << std::endl;
                     return;
                 }
             } while (!parser.Parse(buf.data(), received, parsed));
@@ -305,9 +304,6 @@ void ServerImpl::RunConnection() {
                     received = recv(client, buf.data() + offset, buf.capacity() - offset, 0);
                     if (received <= 0) { // client bails out, no data to store
                         close(client);
-                        std::cout << "network debug: client " << client
-                                  << " neglected to send data, buf:" << std::string(buf.data(), buf.size())
-                                  << std::endl;
                         return;
                     }
                     offset += received;
@@ -331,7 +327,6 @@ void ServerImpl::RunConnection() {
                 sent = send(client, out.data() + offset, out.size() - offset, 0);
                 if (sent <= 0) { // client bails out, reply not sent
                     close(client);
-                    std::cout << "network debug: client " << client << " neglected to read reply" << std::endl;
                     return;
                 }
                 offset += sent;
