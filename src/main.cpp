@@ -196,5 +196,11 @@ int main(int argc, char **argv) {
         std::cerr << "Fatal error" << e.what() << std::endl;
     }
 
+    uv_timer_stop(&timer);
+    uv_signal_stop(&sig_term);
+    uv_signal_stop(&sig_int);
+    if (uv_loop_close(&loop))
+        std::cerr << "uv_loop_close reports unclosed handles/requests" << std::endl;
+
     return 0;
 }
