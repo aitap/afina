@@ -37,18 +37,24 @@ template <void (ServerImpl::*method)()> static void *PthreadProxy(void *p) {
 }
 
 // See Server.h
-ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps) : Server(ps) {}
+ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps) : Server(ps) {
+    pthread_mutex_init(&client_socket_lock, nullptr);
+    pthread_cond_init(&client_socket_cv, nullptr);
+}
 
 // See Server.h
-ServerImpl::~ServerImpl() {}
+ServerImpl::~ServerImpl() {
+    pthread_cond_destroy(&client_socket_cv);
+    pthread_mutex_destroy(&client_socket_lock);
+}
 
 // See Server.h
 void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
     // If a client closes a connection, this will generally produce a SIGPIPE
-    // signal that will kill the process. We want to ignore this signal, so send()
-    // just returns -1 when this happens.
+    // signal that would kill the process. We want to ignore this signal, so that
+    // send() just returns -1 when this happens.
     sigset_t sig_mask;
     sigemptyset(&sig_mask);
     sigaddset(&sig_mask, SIGPIPE);
@@ -56,10 +62,13 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
         throw std::runtime_error("Unable to mask SIGPIPE");
     }
 
-    // Setup server parameters BEFORE thread created, that will guarantee
+    // Setup server parameters BEFORE thread is created, that will guarantee
     // variable value visibility
     max_workers = n_workers;
     listen_port = port;
+    // NOTE: Actually, this doesn't guarantee the visibility because of per-core cache.
+    // Stricty speaking, we should issue a memory barrier before creating a new thread.
+    // Waiting on a mutex does that for us.
 
     // The pthread_create function creates a new thread.
     //
@@ -99,7 +108,11 @@ void ServerImpl::Stop() {
 // See Server.h
 void ServerImpl::Join() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
-    pthread_join(accept_thread, 0);
+    void *retval;
+    if (pthread_join(accept_thread, &retval))
+        throw std::runtime_error("pthread_join failed");
+    if (retval) // better late than never
+        throw std::runtime_error("server thread encountered an error");
 }
 
 // See Server.h
@@ -135,8 +148,8 @@ void ServerImpl::RunAcceptor() {
     // make sure the client received the acknowledgement that the connection has been terminated.
     // During this time, this port is unavailable to other processes, unless we specify this option
     //
-    // This option let kernel knows that we are OK that multiple threads/processes are listen on the
-    // same port. In a such case kernel will balance input traffic between all listeners (except those who
+    // This option let kernel knows that we are OK that another process may listen on the same
+    // port. In a such case kernel will balance input traffic between all listeners (except those which
     // are closed already)
     int opts = 1;
     if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opts, sizeof(opts)) == -1) {
@@ -152,18 +165,36 @@ void ServerImpl::RunAcceptor() {
     }
 
     // Start listening. The second parameter is the "backlog", or the maximum number of
-    // connections that we'll allow to queue up. Note that listen() doesn't block until
-    // incoming connections arrive. It just makesthe OS aware that this process is willing
-    // to accept connections on this socket (which is bound to a specific IP and port)
+    // connections that we'll allow to queue up (while the application is *not* doing accept()
+    // for them). Note that listen() doesn't block until incoming connections arrive. It
+    // just makesthe OS aware that this process is willing to accept connections on this
+    // socket (which is bound to a specific IP and port)
     if (listen(server_socket, 5) == -1) {
         close(server_socket);
         throw std::runtime_error("Socket listen() failed");
     }
 
-    int client_socket;
     struct sockaddr_in client_addr;
     socklen_t sinSize = sizeof(struct sockaddr_in);
+    if (pthread_mutex_lock(&client_socket_lock))
+        throw std::runtime_error("couldn't lock client socket mutex");
     while (running.load()) {
+        // the requirement is: access the worker threads only from the accept_thread
+        // so I do
+        // this reaps the dead children to make space for more client connections
+        // (I think I could implement it with detached threads and a simple shared atomic counter, though)
+        for (auto it = connections.begin(); it != connections.end();) {
+            if (pthread_kill(*it, 0)) { // doesn't kill, does check
+                void *retval;
+                if (pthread_join(*it, &retval))
+                    throw std::runtime_error("failed to join a dead client thread");
+                if (retval)
+                    throw std::runtime_error("client thread had encountered an error");
+                // we're still alive?
+                it = connections.erase(it);
+            } else
+                ++it;
+        }
         std::cout << "network debug: waiting for connection..." << std::endl;
 
         // When an incoming connection arrives, accept it. The call to accept() blocks until
@@ -173,21 +204,53 @@ void ServerImpl::RunAcceptor() {
             throw std::runtime_error("Socket accept() failed");
         }
 
-        // TODO: Start new thread and process data from/to connection
-        pthread_t client_thread;
-        if (pthread_create(&accept_thread, NULL, PthreadProxy<&ServerImpl::RunConnection>, this) < 0) {
-            throw; // FIXME: do something meaningful
+        if (connections.size() >= max_workers) {
+            send(client_socket, "SERVER_ERROR Вас много -- я одна\r\n", strlen("SERVER_ERROR Вас много -- я одна\r\n"),
+                 MSG_DONTWAIT);
+            // we don't care, we should close as soon as possible and get on with it
+            // but this should fit in a single TCP packet even if MTU is as small as 800, shouldn't it?
+            shutdown(client_socket, SHUT_RDWR);
+            close(client_socket);
+            continue;
         }
+
+        auto it = connections.emplace(connections.end());
+        if (pthread_create(&*it /* yeah, it's a pointer to a dereferenced iterator */, NULL,
+                           PthreadProxy<&ServerImpl::RunConnection>, this) < 0) {
+            throw std::runtime_error("couldn't create client socket thread failed");
+        }
+        if (pthread_cond_wait(&client_socket_cv,
+                              &client_socket_lock)) // make sure that the client thread gets the socket
+            throw std::runtime_error("couldn't wait on client socket condvar");
     }
 
     // Cleanup on exit...
     close(server_socket);
+
+    if (pthread_mutex_unlock(&client_socket_lock))
+        throw std::runtime_error("couldn't unlock client socket mutex");
+
+    // at this point we have to clean up all client threads
+    for (pthread_t &thread : connections) {
+        void *retval;
+        if (pthread_join(thread, &retval))
+            throw std::runtime_error("failed to join a dead client thread");
+        if (retval)
+            throw std::runtime_error("client thread had encountered an error");
+    }
 }
 
 // See Server.h
 void ServerImpl::RunConnection() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
-    // FIXME: handle the connection
+    // first and foremost, retrieve the socket and send the accept thread "all OK"
+    if (pthread_mutex_lock(&client_socket_lock))
+        throw std::runtime_error("couldn't lock client socket mutex");
+    int client = client_socket;
+    if (pthread_cond_signal(&client_socket_cv))
+        throw std::runtime_error("couldn't signal client socket condvar");
+    if (pthread_mutex_unlock(&client_socket_lock))
+        throw std::runtime_error("couldn't unlock client socket mutex");
 }
 
 } // namespace Blocking

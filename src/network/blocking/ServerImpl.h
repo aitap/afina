@@ -44,26 +44,32 @@ private:
     static void *RunAcceptorProxy(void *p);
 
     // Atomic flag to notify threads when it is time to stop. Note that
-    // flag must be atomic in order to safely publisj changes cross thread
+    // flag must be atomic in order to safely publish changes cross thread
     // bounds
     std::atomic<bool> running;
 
     // Thread that is accepting new connections
     pthread_t accept_thread;
+    // The socket for the next client thread to work with
+    int client_socket;
+    // And the required synchronization to pass it from accept to client thread
+    pthread_mutex_t client_socket_lock;
+    pthread_cond_t client_socket_cv;
 
-    // Maximum number of client allowed to exists concurrently
-    // on server, permits access only from inside of accept_thread.
-    // Read-only
+    // Threads that are talking to clients
+    // NOTE: access is permitted only from inside of accept_thread
+    std::vector<pthread_t> connections;
+
+    // XXX: why not make the following read-only variables const and initialize them in the constructor?
+
+    // Maximum number of client allowed to exist concurrently
+    // on the server
+    // NOTE: access is permitted only from inside of accept_thread
     uint16_t max_workers;
 
-    // Port to listen for new connections, permits access only from
-    // inside of accept_thread
-    // Read-only
+    // Port to listen for new connections
+    // NOTE: access is permitted only from inside of accept_thread
     uint32_t listen_port;
-
-    // Threads that are processing connection data, permits
-    // access only from inside of accept_thread
-    std::vector<pthread_t> connections;
 };
 
 } // namespace Blocking
