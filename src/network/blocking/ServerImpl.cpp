@@ -11,9 +11,9 @@
 
 #include <netdb.h>
 #include <netinet/tcp.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <netinet/tcp.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -279,7 +279,7 @@ void ServerImpl::RunConnection() {
 
     for (;;) { // the loop ends when recv()/send() fails
         std::vector<char> buf;
-        buf.reserve(read_buffer_size);
+        buf.resize(read_buffer_size);
 
         // both parser and command may throw exceptions
         std::string out;
@@ -291,7 +291,7 @@ void ServerImpl::RunConnection() {
                 // move excess data to the beginning of the buffer
                 memmove(buf.data(), buf.data() + parsed, received - parsed);
                 // append whatever the client may have sent
-                received = recv(client, buf.data(), buf.capacity() - received + parsed, 0);
+                received = recv(client, buf.data(), buf.size() - received + parsed, 0);
                 if (received <= 0) { // client bails out, no command to execute
                     shutdown(client, SHUT_RDWR);
                     close(client);
@@ -307,7 +307,7 @@ void ServerImpl::RunConnection() {
             // was there an argument?
             if (arg_size) {
                 arg_size += 2; // data is followed by \r\n
-                buf.reserve(arg_size);
+                buf.resize(arg_size);
 
                 size_t offset = 0;
                 if (received - parsed) { // was there any excess?
@@ -317,7 +317,7 @@ void ServerImpl::RunConnection() {
                 }
 
                 while (offset < arg_size) { // append the body we know the size of
-                    received = recv(client, buf.data() + offset, buf.capacity() - offset, 0);
+                    received = recv(client, buf.data() + offset, buf.size() - offset, 0);
                     if (received <= 0) { // client bails out, no data to store
                         shutdown(client, SHUT_RDWR);
                         close(client);
