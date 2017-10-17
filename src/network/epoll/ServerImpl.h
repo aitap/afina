@@ -30,43 +30,21 @@ public:
 
 protected:
     /**
-     * Method is running in the connection acceptor thread
+     * Method is calling epoll_wait in a separate thread
      */
-    void RunAcceptor();
-
-    /**
-     * Methos is running for each connection
-     */
-    void RunConnection();
+    void RunEpoll();
 
 private:
-    static void *RunAcceptorProxy(void *p);
-
     // Atomic flag to notify threads when it is time to stop. Note that
     // flag must be atomic in order to safely publish changes cross thread
     // bounds
     std::atomic<bool> running;
 
-    // Thread that is accepting new connections
-    pthread_t accept_thread;
-    // The socket for the next client thread to work with
-    int client_socket;
-    // And the required synchronization to pass it from accept to client thread
-    pthread_mutex_t client_socket_lock;
-    pthread_cond_t client_socket_cv;
+    // Thread accepting and crunching client connections
+    pthread_t epoll_thread;
 
-    // Threads that are talking to clients
-    // NOTE: access is permitted only from inside of accept_thread
-    std::vector<pthread_t> connections;
-
-    // Maximum number of client allowed to exist concurrently
-    // on the server
-    // NOTE: access is permitted only from inside of accept_thread
-    uint16_t max_workers;
-
-    // Port to listen for new connections
-    // NOTE: access is permitted only from inside of accept_thread
-    uint32_t listen_port;
+    // Port number to listen on
+    uint16_t listen_port;
 };
 
 } // namespace Blocking
