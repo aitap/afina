@@ -276,33 +276,33 @@ void ServerImpl::RunConnection() {
 #endif
 
     Protocol::Parser parser;
+    std::vector<char> buf;
+    buf.resize(read_buffer_size);
+    ssize_t received = 0;
+    size_t parsed = 0;
 
-    for (;;) { // the loop ends when recv()/send() fails
-        std::vector<char> buf;
-        buf.resize(read_buffer_size);
-
+    for (;;) {
         std::string out;
         bool bail_out = false;
         // both parser and command may throw exceptions
         try {
-            // first, read & parse the command
-            ssize_t received = 0;
-            size_t parsed = 0;
-            do {
+            // parse first because we may have saved this from the first iteration
+            while (!parser.Parse(buf.data() + parsed, received - parsed, parsed)) {
                 // move excess data to the beginning of the buffer
                 memmove(buf.data(), buf.data() + parsed, received - parsed);
                 // append whatever the client may have sent
-                received = recv(client, buf.data(), buf.size() - received + parsed, 0);
-                if (received < 0) { // client bails out, no command to execute
+                received = recv(client, buf.data() + received, buf.size() - received, 0);
+                if (received <= 0) { // client bails out, no command to execute
                     shutdown(client, SHUT_RDWR);
                     close(client);
                     return;
                 }
-            } while (!parser.Parse(buf.data(), received, parsed));
+            }
 
             // parser.Parse returned true -- can build a command now
             uint32_t arg_size;
             auto cmd = parser.Build(arg_size);
+            parser.Reset(); // don't forget
 
             std::string arg;
             // was there an argument?
