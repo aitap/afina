@@ -55,6 +55,7 @@ private:
     // And the required synchronization to pass it from accept to client thread
     pthread_mutex_t client_socket_lock;
     pthread_cond_t client_socket_cv;
+    bool client_okay;
 
     // Threads that are talking to clients
     // NOTE: access is permitted only from inside of accept_thread

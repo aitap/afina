@@ -219,16 +219,14 @@ void ServerImpl::RunAcceptor() {
         }
 
         auto it = connections.emplace(connections.end());
+        client_okay = false;
         if (pthread_create(&*it /* yeah, it's a pointer to a dereferenced iterator */, NULL,
                            PthreadProxy<&ServerImpl::RunConnection>, this) < 0) {
             throw std::runtime_error("couldn't create client socket thread failed");
         }
-        if (pthread_cond_wait(&client_socket_cv,
-                              &client_socket_lock)) // make sure that the client thread gets the socket
-            throw std::runtime_error("couldn't wait on client socket condvar");
-        // NOTE: this may still fail because of spurious wakeups.
-        // The best way to be sure would be to add a boolean flag which this method would set to false
-        // and wait for it to become true in a while loop
+        while (!client_okay) // make sure that the client thread gets the socket
+            if (pthread_cond_wait(&client_socket_cv, &client_socket_lock))
+                throw std::runtime_error("couldn't wait on client socket condvar");
     }
 
     // Cleanup on exit...
@@ -246,6 +244,7 @@ void ServerImpl::RunAcceptor() {
         if (retval)
             throw std::runtime_error("client thread had encountered an error");
     }
+    connections.clear();
 }
 
 // better test with a really small buffer to catch possible errors
@@ -258,6 +257,7 @@ void ServerImpl::RunConnection() {
     if (pthread_mutex_lock(&client_socket_lock))
         throw std::runtime_error("couldn't lock client socket mutex");
     int client = client_socket;
+    client_okay = true;
     if (pthread_cond_signal(&client_socket_cv))
         throw std::runtime_error("couldn't signal client socket condvar");
     if (pthread_mutex_unlock(&client_socket_lock))
@@ -275,14 +275,14 @@ void ServerImpl::RunConnection() {
     }
 #endif
 
-    Afina::Protocol::Parser parser;
+    Protocol::Parser parser;
 
     for (;;) { // the loop ends when recv()/send() fails
         std::vector<char> buf;
         buf.resize(read_buffer_size);
 
-        // both parser and command may throw exceptions
         std::string out;
+        // both parser and command may throw exceptions
         try {
             // first, read & parse the command
             ssize_t received = 0;
@@ -292,7 +292,7 @@ void ServerImpl::RunConnection() {
                 memmove(buf.data(), buf.data() + parsed, received - parsed);
                 // append whatever the client may have sent
                 received = recv(client, buf.data(), buf.size() - received + parsed, 0);
-                if (received <= 0) { // client bails out, no command to execute
+                if (received < 0) { // client bails out, no command to execute
                     shutdown(client, SHUT_RDWR);
                     close(client);
                     return;
