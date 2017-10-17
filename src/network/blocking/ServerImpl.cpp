@@ -12,6 +12,7 @@
 #include <netdb.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <netinet/tcp.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -260,6 +261,20 @@ void ServerImpl::RunConnection() {
         throw std::runtime_error("couldn't signal client socket condvar");
     if (pthread_mutex_unlock(&client_socket_lock))
         throw std::runtime_error("couldn't unlock client socket mutex");
+
+#if defined(SO_KEEPALIVE) && defined(TCP_KEEPCNT) && defined(TCP_KEEPIDLE) && defined(TCP_KEEPINTVL)
+	// this ensures fast shutdown. some production applications won't like that
+	{
+		int enabled = 1, ka_cnt = 3, ka_idle = 3, ka_intl = 1;
+		if (
+			setsockopt(client, SOL_SOCKET, SO_KEEPALIVE, &enabled, sizeof(enabled))
+			|| setsockopt(client, IPPROTO_TCP, TCP_KEEPCNT, &ka_cnt, sizeof(ka_cnt))
+			|| setsockopt(client, IPPROTO_TCP, TCP_KEEPIDLE, &ka_cnt, sizeof(ka_idle))
+			|| setsockopt(client, IPPROTO_TCP, TCP_KEEPINTVL, &ka_cnt, sizeof(ka_intl))
+		)
+			throw std::runtime_error("couldn't enable keep-alive on the client socket");
+	}
+#endif
 
     Afina::Protocol::Parser parser;
 
