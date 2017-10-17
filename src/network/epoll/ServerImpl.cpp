@@ -100,7 +100,7 @@ static int setsocknonblocking(int sock) {
 struct ep_fd {
     int fd;
     ep_fd(int fd_) : fd(fd_) {}
-    virtual void advance() = 0;
+    virtual void advance(uint32_t) = 0;
     virtual ~ep_fd() {}
 };
 
@@ -111,16 +111,87 @@ static int epoll_modify(int epoll_fd, int how, uint32_t events, ep_fd &target) {
     return epoll_ctl(epoll_fd, how, target.fd, &new_ev);
 }
 
+// test with small buffer first
+static const size_t buffer_size = 16;
+
 struct client_fd : ep_fd {
     int epoll_fd;
     std::shared_ptr<Afina::Storage> ps;
     std::vector<char> buf;
+    size_t offset;
+    std::string out;
     std::list<client_fd> &list;
     std::list<client_fd>::iterator self;
+    Protocol::Parser parser;
     client_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_fd> &list_,
               std::list<client_fd>::iterator self_)
-        : ep_fd(fd_), epoll_fd(epoll_fd_), ps(ps_), list(list_), self(self_) {}
-    void advance() override { throw std::runtime_error("unimplemented"); }
+        : ep_fd(fd_), epoll_fd(epoll_fd_), ps(ps_), offset(0), list(list_), self(self_) {
+        buf.reserve(buffer_size);
+    }
+    void cleanup() {
+        epoll_modify(epoll_fd, EPOLL_CTL_DEL, 0, *this);
+        shutdown(fd, SHUT_RDWR);
+        close(fd);
+        // time to commit sudoku
+        list.erase(self);
+        // ISO C++ faq does allow even `delete this`, subject to it being done carefully
+    }
+    void advance(uint32_t events) override {
+        if (events & (EPOLLHUP | EPOLLERR))
+            return cleanup();
+
+        ssize_t len = 0; // return value of send() & recv()
+
+        // first, try to write out any pending output
+        // otherwise we can't run any new commands
+        if (out.size()) {
+            do {
+                len = send(fd, out.data(), out.size(), 0);
+                if (len > 0)
+                    out.erase(0, len);
+            } while (out.size() && len > 0);
+            if (errno != EWOULDBLOCK && errno != EAGAIN)
+                return cleanup();
+        }
+
+        // next, read whatever the client has sent us
+        len = 0;
+        do {
+            offset += len;
+            if (buf.capacity() == offset)
+                buf.reserve(buf.capacity() * 2);
+            len = recv(fd, buf.data() + offset, buf.capacity() - offset, 0);
+        } while (len > 0);
+        if (errno != EWOULDBLOCK && errno != EAGAIN)
+            return cleanup();
+
+        // are we parsing a command or reading a body?
+        std::string reply; // get ready for exceptions
+        try {
+            uint32_t body_size;
+            if (auto cmd = parser.Build(body_size)) { // yes, there was a pending command
+                if (offset >= body_size + 2) {        // and we have a full body + \r\n
+                    std::string body{buf.data(), body_size};
+                    buf.erase(buf.begin(), buf.begin() + body_size + 2);
+                    offset -= (body_size + 2);
+                    cmd->Execute(*ps, body, out);
+                }                  // else we'll have to wait until more comes
+            } else {               // none yet
+                size_t parsed = 0; // let's try to parse, then
+                parser.Parse(buf.data(), offset, parsed);
+                buf.erase(buf.begin(), buf.begin() + parsed);
+                offset -= parsed;
+                // FIXME: but what if we have a command now?!
+            }
+        } catch (std::runtime_error &e) {
+            // if anything fails we just report the error to the user
+            out = std::string("CLIENT_ERROR ") + e.what();
+        }
+
+        if (out.size())
+            out += std::string("\r\n");
+        // FIXME: shouldn't we at least try to send it now?
+    }
 };
 
 struct listen_fd : ep_fd {
@@ -129,7 +200,11 @@ struct listen_fd : ep_fd {
     std::list<client_fd> &client_list;
     listen_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_fd> &client_list_)
         : ep_fd(fd_), epoll_fd(epoll_fd_), ps(ps_), client_list(client_list_) {}
-    void advance() override {
+    void advance(uint32_t events) override {
+        if (events & (EPOLLHUP | EPOLLERR)) {
+            close(fd);
+            throw std::runtime_error("Caught error state on listen socket");
+        }
         // prepare to accept a connection
         struct sockaddr_in client_addr;
         socklen_t sinSize = sizeof(struct sockaddr_in);
@@ -143,7 +218,7 @@ struct listen_fd : ep_fd {
                                              client_list.end() /* see below */);
             cl_it->self = cl_it; // sets the self field so it would be able to suicide later
             // register the object in epoll fd
-            if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT, *cl_it))
+            if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT | EPOLLET, *cl_it))
                 throw std::runtime_error("epollctl failed to add client socket");
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK)
@@ -198,7 +273,7 @@ void ServerImpl::RunEpoll() {
     std::list<client_fd> client_list;
     listen_fd listening_object{server_socket, epoll_sock, pStorage, client_list};
     // add the listen socket to the epoll set
-    if (epoll_modify(epoll_sock, EPOLL_CTL_ADD, EPOLLIN, listening_object))
+    if (epoll_modify(epoll_sock, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, listening_object))
         throw std::runtime_error("epoll_ctl failed to add the listen socket");
 
     // main loop
@@ -209,13 +284,14 @@ void ServerImpl::RunEpoll() {
         if (events_now < 0)
             throw std::runtime_error("epoll failed");
         for (int i = 0; i < events_now; i++)
-            ((ep_fd *)events[i].data.ptr)->advance();
+            ((ep_fd *)events[i].data.ptr)->advance(events[i].events);
     }
 
     // clean up all sockets involved
     shutdown(server_socket, SHUT_RDWR);
     close(server_socket);
     for (client_fd &cl : client_list) {
+        // don't call .cleanup() because it invalidates cl
         shutdown(cl.fd, SHUT_RDWR);
         close(cl.fd);
     }
