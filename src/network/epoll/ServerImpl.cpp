@@ -9,6 +9,7 @@
 #include <pthread.h>
 #include <signal.h>
 
+#include <errno.h>
 #include <sys/epoll.h>
 
 #include <netdb.h>
@@ -103,37 +104,55 @@ struct ep_fd {
     virtual ~ep_fd() {}
 };
 
-struct client_fd : ep_fd {
-    std::shared_ptr<Afina::Storage> ps;
-    std::vector<char> buf;
-    client_fd(int fd_, std::shared_ptr<Afina::Storage> ps_) : ep_fd(fd_), ps(ps_) {}
-    void advance() override { throw std::runtime_error("unimplemented"); }
-};
-
-struct listen_fd : ep_fd {
-    std::shared_ptr<Afina::Storage> ps;
-    std::list<client_fd> &client_list;
-    listen_fd(int fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_fd> &client_list_)
-        : ep_fd(fd_), ps(ps_), client_list(client_list_) {}
-    void advance() override {
-        throw std::runtime_error("unimplemented");
-        /*
-                struct sockaddr_in client_addr;
-                socklen_t sinSize = sizeof(struct sockaddr_in);
-                if ((client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &sinSize)) == -1) {
-                        close(server_socket);
-                        throw std::runtime_error("Socket accept() failed");
-                }
-        */
-    }
-};
-
-int epoll_modify(int epoll_fd, int how, uint32_t events, ep_fd &target) {
+static int epoll_modify(int epoll_fd, int how, uint32_t events, ep_fd &target) {
     struct epoll_event new_ev {
         .events = events, .data.ptr = (void *)&target
     };
     return epoll_ctl(epoll_fd, how, target.fd, &new_ev);
 }
+
+struct client_fd : ep_fd {
+    int epoll_fd;
+    std::shared_ptr<Afina::Storage> ps;
+    std::vector<char> buf;
+    std::list<client_fd> &list;
+    std::list<client_fd>::iterator self;
+    client_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_fd> &list_,
+              std::list<client_fd>::iterator self_)
+        : ep_fd(fd_), epoll_fd(epoll_fd_), ps(ps_), list(list_), self(self_) {}
+    void advance() override { throw std::runtime_error("unimplemented"); }
+};
+
+struct listen_fd : ep_fd {
+    int epoll_fd;
+    std::shared_ptr<Afina::Storage> ps;
+    std::list<client_fd> &client_list;
+    listen_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_fd> &client_list_)
+        : ep_fd(fd_), epoll_fd(epoll_fd_), ps(ps_), client_list(client_list_) {}
+    void advance() override {
+        // prepare to accept a connection
+        struct sockaddr_in client_addr;
+        socklen_t sinSize = sizeof(struct sockaddr_in);
+        int client_socket;
+        while ((client_socket = accept(fd, (struct sockaddr *)&client_addr, &sinSize)) !=
+               -1) { // got a pending connection
+            if (setsocknonblocking(client_socket))
+                throw std::runtime_error("Couldn't set client socket to non-blocking");
+            // create a client object
+            auto cl_it = client_list.emplace(client_list.end(), client_socket, epoll_fd, ps, client_list,
+                                             client_list.end() /* see below */);
+            cl_it->self = cl_it; // sets the self field so it would be able to suicide later
+            // register the object in epoll fd
+            if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT, *cl_it))
+                throw std::runtime_error("epollctl failed to add client socket");
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+            return; // don't crash if we're just waiting for more clients
+        // oh well
+        close(fd);
+        throw std::runtime_error("Socket accept() failed");
+    }
+};
 
 const size_t num_events = 10;   // events at a time
 const int epoll_timeout = 1000; // ms, to check every now and then that we still need to be running
@@ -177,9 +196,10 @@ void ServerImpl::RunEpoll() {
 
     // prepare the necessary objects to handle clients
     std::list<client_fd> client_list;
-    listen_fd listening_object{server_socket, pStorage, client_list};
+    listen_fd listening_object{server_socket, epoll_sock, pStorage, client_list};
     // add the listen socket to the epoll set
-    epoll_modify(epoll_sock, EPOLL_CTL_ADD, EPOLLIN, listening_object);
+    if (epoll_modify(epoll_sock, EPOLL_CTL_ADD, EPOLLIN, listening_object))
+        throw std::runtime_error("epoll_ctl failed to add the listen socket");
 
     // main loop
     while (running.load()) {
