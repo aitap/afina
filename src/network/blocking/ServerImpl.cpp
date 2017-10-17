@@ -282,6 +282,7 @@ void ServerImpl::RunConnection() {
         buf.resize(read_buffer_size);
 
         std::string out;
+        bool bail_out = false;
         // both parser and command may throw exceptions
         try {
             // first, read & parse the command
@@ -334,6 +335,7 @@ void ServerImpl::RunConnection() {
         } catch (std::runtime_error &e) {
             // if anything fails we just report the error to the user
             out = std::string("CLIENT_ERROR ") + e.what();
+            bail_out = true;
         }
 
         if (out.size()) {
@@ -348,6 +350,11 @@ void ServerImpl::RunConnection() {
                     return;
                 }
                 offset += sent;
+            }
+            if (bail_out) {
+                shutdown(client, SHUT_RDWR);
+                close(client);
+                return;
             }
         }
     }
