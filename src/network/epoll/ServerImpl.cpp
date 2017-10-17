@@ -126,7 +126,7 @@ struct client_fd : ep_fd {
     client_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_fd> &list_,
               std::list<client_fd>::iterator self_)
         : ep_fd(fd_), epoll_fd(epoll_fd_), ps(ps_), offset(0), list(list_), self(self_) {
-        buf.reserve(buffer_size);
+        buf.resize(buffer_size);
     }
     void cleanup() {
         epoll_modify(epoll_fd, EPOLL_CTL_DEL, 0, *this);
@@ -158,9 +158,9 @@ struct client_fd : ep_fd {
         len = 0;
         do {
             offset += len;
-            if (buf.capacity() == offset)
-                buf.reserve(buf.capacity() * 2);
-            len = recv(fd, buf.data() + offset, buf.capacity() - offset, 0);
+            if (buf.size() == offset)
+                buf.resize(buf.size() * 2);
+            len = recv(fd, buf.data() + offset, buf.size() - offset, 0);
         } while (len > 0);
         if (errno != EWOULDBLOCK && errno != EAGAIN)
             return cleanup();
