@@ -6,9 +6,18 @@ use threads::shared;
 use IPC::Open3;
 use Test::More tests => 25;
 use IO::Socket::INET;
+use Getopt::Long;
 
-my $pid = open3(my $stdin, my $stdout, 0, qw(src/afina -n blocking));
-ok $pid, "Started afina with PID=$pid";
+my $backend = "epoll";
+my $silent = 0;
+
+GetOptions(
+	"backend=s" => \$backend,
+	"silent" => \$silent
+) or die "Usage: $0 [-backend=backend] [--silent]\n";
+
+my $pid = open3(my $stdin, my $stdout, 0, "src/afina", "-n", $backend);
+ok $pid, "Started afina with PID=$pid and $backend backend";
 
 local $SIG{ALRM} = sub { kill 'KILL', $pid; die "Timeout\n" };
 alarm(5);
@@ -21,7 +30,9 @@ while (<$stdout>) {
 	}
 }
 ok(close($stdin), "Putting Afina to background");
-(threads::->create(sub { my $fh = $_[0]; while(<$fh>) { print "# afina: $_" } }, $stdout))->detach();
+(threads::->create(sub { my $fh = $_[0]; while(<$fh>) { $silent || print "# afina: $_" } }, $stdout))->detach();
+
+alarm(10);
 
 sub afina_request_silent { # 0 tests
 	my ($request) = @_;
@@ -44,18 +55,17 @@ sub afina_request { # 3 tests
 	);
 	ok($socket, "Connected to Afina");
 	ok(print($socket $request), "Sent request");
+	print $request =~ s/^/# -> /mrg;
 	ok(shutdown($socket, SHUT_WR()), "Closed writing end of connection");
 	my $received;
 	$received .= $_ while (<$socket>);
+	print $received =~ s/^/# <- /mrg;
 	$received;
 }
 
 sub afina_test { # 4 tests
 	my ($request, $response) = @_;
-	print $request =~ s/^/# -> /mrg;
-	my $received = afina_request($request);
-	print $received =~ s/^/# <- /mrg;
-	is($received, $response, "Response matches expected");
+	is(afina_request($request), $response, "Response matches expected");
 }
 
 afina_test("set foo 0 0 6\r\nfoobar\r\n", "STORED\r\n");
@@ -89,4 +99,3 @@ afina_test(
 );
 
 ok(kill('KILL', $pid), "Stopped Afina");
-
