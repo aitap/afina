@@ -4,7 +4,7 @@ use warnings;
 use threads;
 use threads::shared;
 use IPC::Open3;
-use Test::More tests => 16;
+use Test::More tests => 21;
 use IO::Socket::INET;
 
 my $pid = open3(my $stdin, my $stdout, 0, qw(src/afina -n blocking));
@@ -63,11 +63,19 @@ afina_test("get foo\r\n", "VALUE foo 0 6\r\nfoobar\r\nEND\r\n");
 afina_test("get foo\r\nget foo\r\n", "VALUE foo 0 6\r\nfoobar\r\nEND\r\nVALUE foo 0 6\r\nfoobar\r\nEND\r\n");
 
 my %par_responses;
-$par_responses{$_}++ for (map { $_->join } map { threads::->create(\&afina_request_silent, $_) } map { sprintf "set bar 0 0 3\r\n%03d\r\n", $_ } 1..1000);
+$par_responses{$_}++ for (map { $_->join } map { threads::->create(\&afina_request_silent, $_) } map { sprintf "set bar 0 0 3\r\n%03d\r\n", $_ } 1..100);
 say "# Parallel test responses:";
 for (sort { $par_responses{$a} <=> $par_responses{$b} } keys %par_responses) {
-	print "# $par_responses{$_} $_"
+	print "# $par_responses{$_} ".($_=~s/([\r\n])/{"\r"=>'\r',"\n"=>'\n'}->{$1}/megr)."\n"
 }
+ok($par_responses{"STORED\r\n"}, "Afina replied with 'STORED' at least once");
+
+afina_test(
+	"set foo 0 0 3\r\nwtf\r\n"
+	."get foo\r\n",
+	"STORED\r\n"
+	."VALUE foo 0 3\r\nwtf\r\nEND\r\n"
+);
 
 ok(kill('KILL', $pid), "Stopped Afina");
 

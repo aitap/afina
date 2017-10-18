@@ -278,25 +278,28 @@ void ServerImpl::RunConnection() {
     Protocol::Parser parser;
     std::vector<char> buf;
     buf.resize(read_buffer_size);
-    ssize_t received = 0;
     size_t parsed = 0;
+    size_t offset = 0;
 
     for (;;) {
         std::string out;
         bool bail_out = false;
         // both parser and command may throw exceptions
         try {
+            ssize_t received = 0;
             // parse first because we may have saved this from the first iteration
-            while (!parser.Parse(buf.data() + parsed, received - parsed, parsed)) {
+            while (!parser.Parse(buf.data() + parsed, offset - parsed, parsed)) {
                 // move excess data to the beginning of the buffer
-                memmove(buf.data(), buf.data() + parsed, received - parsed);
+                memmove(buf.data(), buf.data() + parsed, offset - parsed);
+                offset -= parsed;
                 // append whatever the client may have sent
-                received = recv(client, buf.data() + received, buf.size() - received, 0);
+                received = recv(client, buf.data() + offset, buf.size() - offset, 0);
                 if (received <= 0) { // client bails out, no command to execute
                     shutdown(client, SHUT_RDWR);
                     close(client);
                     return;
-                }
+                } else
+                    offset += received;
             }
 
             // parser.Parse returned true -- can build a command now
@@ -311,11 +314,10 @@ void ServerImpl::RunConnection() {
                 if (arg_size > buf.size())
                     buf.resize(arg_size);
 
-                size_t offset = 0;
-                if (received - parsed) { // was there any excess?
-                    // as usual, move it to the beginning
-                    memmove(buf.data(), buf.data() + parsed, received - parsed);
-                    offset += received - parsed; // and account for it
+                if (offset - parsed) { // we've read body with the command
+                    // move everything we have to the beginning
+                    memmove(buf.data(), buf.data() + parsed, offset - parsed);
+                    offset -= parsed; // and account for it
                 }
 
                 while (offset < arg_size) { // append the body we know the size of
@@ -328,7 +330,11 @@ void ServerImpl::RunConnection() {
                     offset += received;
                 }
                 // prepare the body
-                arg.assign(buf.data(), offset - 2 /* account for extra \r\n */);
+                arg.assign(buf.data(), arg_size - 2 /* account for extra \r\n */);
+                // move the remainings of the buffer to the beginning and fix offsets & sizes
+                memmove(buf.data(), buf.data() + arg_size, offset - arg_size);
+                parsed = 0;
+                offset -= arg_size;
             }
 
             // time to do the deed
