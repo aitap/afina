@@ -107,7 +107,7 @@ struct ep_fd {
 
 static int epoll_modify(int epoll_fd, int how, uint32_t events, ep_fd &target) {
     struct epoll_event new_ev {
-        .events = events, .data.ptr = (void *)&target
+        events, { (void *)&target }
     };
     return epoll_ctl(epoll_fd, how, target.fd, &new_ev);
 }
