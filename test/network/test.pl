@@ -4,7 +4,7 @@ use warnings;
 use threads;
 use threads::shared;
 use IPC::Open3;
-use Test::More tests => 25;
+use Test::More tests => 57;
 use IO::Socket::INET;
 use Getopt::Long;
 
@@ -97,5 +97,49 @@ afina_test(
 	."VALUE bar 0 3\r\nzzz\r\n"
 	."END\r\n"
 );
+
+afina_test(
+	"add test 0 0 6\r\nfoobar\r\n",
+	"STORED\r\n"
+);
+
+afina_test(
+	"add test 0 0 6\r\nfoobar\r\n",
+	"NOT_STORED\r\n"
+);
+
+afina_test(
+	"append test_ 0 0 3\r\nwtf\r\n",
+	"NOT_STORED\r\n"
+);
+
+afina_test(
+	"append test 0 0 3\r\nwtf\r\n",
+	"STORED\r\n"
+);
+
+afina_test(
+	"get test\r\n",
+	"VALUE test 0 9\r\nfoobarwtf\r\nEND\r\n"
+);
+
+TODO: {
+	local $TODO = "Replace command isn't yet implemented in the parser";
+
+	afina_test(
+		"replace test_ 0 0 3\r\nwtf\r\n",
+		"NOT_STORED\r\n"
+	);
+
+	afina_test(
+		"replace test 0 0 3\r\nzzz\r\n",
+		"STORED\r\n"
+	);
+
+	afina_test(
+		"get test\r\n",
+		"VALUE test 0 3\r\nzzz\r\nEND\r\n"
+	);
+}
 
 ok(kill('KILL', $pid), "Stopped Afina");
