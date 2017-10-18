@@ -308,7 +308,8 @@ void ServerImpl::RunConnection() {
             // was there an argument?
             if (arg_size) {
                 arg_size += 2; // data is followed by \r\n
-                buf.resize(arg_size);
+                if (arg_size > buf.size())
+                    buf.resize(arg_size);
 
                 size_t offset = 0;
                 if (received - parsed) { // was there any excess?
