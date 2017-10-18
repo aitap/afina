@@ -1,5 +1,6 @@
 #include "ServerImpl.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -122,10 +123,11 @@ struct client_fd : ep_fd {
     std::string out;
     std::list<client_fd> &list;
     std::list<client_fd>::iterator self;
+    bool bailout;
     Protocol::Parser parser;
     client_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_fd> &list_,
               std::list<client_fd>::iterator self_)
-        : ep_fd(fd_), epoll_fd(epoll_fd_), ps(ps_), offset(0), list(list_), self(self_) {
+        : ep_fd(fd_), epoll_fd(epoll_fd_), ps(ps_), offset(0), list(list_), self(self_), bailout(false) {
         buf.resize(buffer_size);
     }
     void cleanup() {
@@ -142,8 +144,60 @@ struct client_fd : ep_fd {
 
         ssize_t len = 0; // return value of send() & recv()
 
-        // first, try to write out any pending output
-        // otherwise we can't run any new commands
+        // try to exhaust whatever the client has sent us
+        do {
+            offset += len;
+            if (buf.size() == offset)
+                buf.resize(std::max(buf.size() * 2, buffer_size));
+            len = recv(fd, buf.data() + offset, buf.size() - offset, 0);
+        } while (len > 0);
+        if (errno != EWOULDBLOCK && errno != EAGAIN)
+            return cleanup();
+        if (!len)
+            bailout = true;
+
+        // if we don't have any pending output, we can try parse new commands
+        if (!out.size()) {
+            try {
+                for (;;) { // loop until we can't create more commands
+                    uint32_t body_size;
+                    // check if there's a pending command in the parser
+                    auto cmd = parser.Build(body_size);
+                    if (!cmd) { // maybe we can parse more and get it?
+                        size_t parsed = 0;
+                        parser.Parse(buf.data(), offset, parsed);
+                        buf.erase(buf.begin(), buf.begin() + parsed);
+                        offset -= parsed;
+                        cmd = parser.Build(body_size);
+                    }
+                    if (cmd && (!body_size || offset >= body_size + 2)) {
+                        // got a command and a body if required, will execute now
+                        std::string body;
+                        parser.Reset();
+                        if (body_size) {
+                            // supply the body
+                            std::string body{buf.data(), body_size};
+                            buf.erase(buf.begin(), buf.begin() + body_size + 2);
+                            offset -= (body_size + 2);
+                        }
+                        std::string local_out;
+                        cmd->Execute(*ps, body, local_out);
+                        out += local_out;
+                        out += std::string("\r\n");
+                    } else {
+                        // we did our best, but we can't execute a command yet
+                        // no chance of other commands until more data comes
+                        break;
+                    }
+                }
+            } catch (std::runtime_error &e) {
+                // if anything fails we just report the error to the user
+                out += std::string("CLIENT_ERROR ") + e.what() + std::string("\r\n");
+                bailout = true;
+            }
+        }
+
+        // we have created pending output just now or have it from previous iteration
         if (out.size()) {
             do {
                 len = send(fd, out.data(), out.size(), 0);
@@ -154,43 +208,8 @@ struct client_fd : ep_fd {
                 return cleanup();
         }
 
-        // next, read whatever the client has sent us
-        len = 0;
-        do {
-            offset += len;
-            if (buf.size() == offset)
-                buf.resize(buf.size() * 2);
-            len = recv(fd, buf.data() + offset, buf.size() - offset, 0);
-        } while (len > 0);
-        if (errno != EWOULDBLOCK && errno != EAGAIN)
+        if (bailout)
             return cleanup();
-
-        // are we parsing a command or reading a body?
-        std::string reply; // get ready for exceptions
-        try {
-            uint32_t body_size;
-            if (auto cmd = parser.Build(body_size)) { // yes, there was a pending command
-                if (offset >= body_size + 2) {        // and we have a full body + \r\n
-                    std::string body{buf.data(), body_size};
-                    buf.erase(buf.begin(), buf.begin() + body_size + 2);
-                    offset -= (body_size + 2);
-                    cmd->Execute(*ps, body, out);
-                }                  // else we'll have to wait until more comes
-            } else {               // none yet
-                size_t parsed = 0; // let's try to parse, then
-                parser.Parse(buf.data(), offset, parsed);
-                buf.erase(buf.begin(), buf.begin() + parsed);
-                offset -= parsed;
-                // FIXME: but what if we have a command now?!
-            }
-        } catch (std::runtime_error &e) {
-            // if anything fails we just report the error to the user
-            out = std::string("CLIENT_ERROR ") + e.what();
-        }
-
-        if (out.size())
-            out += std::string("\r\n");
-        // FIXME: shouldn't we at least try to send it now?
     }
 };
 
