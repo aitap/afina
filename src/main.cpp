@@ -15,10 +15,7 @@
 #include <afina/network/Server.h>
 
 #include "network/blocking/ServerImpl.h"
-#include "network/uv/ServerImpl.h"
-#ifdef __linux__
 #include "network/epoll/ServerImpl.h"
-#endif
 #include "storage/MapBasedGlobalLockImpl.h"
 
 typedef struct {
@@ -26,22 +23,6 @@ typedef struct {
     std::shared_ptr<Afina::Network::Server> server;
     std::string pidfile;
 } Application;
-
-// Handle all signals caught
-void signal_handler(uv_signal_t *handle, int signum) {
-    std::cout << "Received stop signal" << std::endl;
-    Application *pApp = static_cast<Application *>(handle->data);
-    // don't leave pidfile: some other process may get our PID later
-    if (pApp->pidfile.size())
-        unlink(pApp->pidfile.c_str());
-    uv_stop(handle->loop);
-}
-
-// Called when it is time to collect passive metrics from services
-void timer_handler(uv_timer_t *handle) {
-    Application *pApp = static_cast<Application *>(handle->data);
-    std::cout << "Start passive metrics collection" << std::endl;
-}
 
 int main(int argc, char **argv) {
     // Build version
@@ -91,19 +72,15 @@ int main(int argc, char **argv) {
     }
 
     // Build  & start network layer
-    std::string network_type = "uv";
+    std::string network_type = "epoll";
     if (options.count("network") > 0) {
         network_type = options["network"].as<std::string>();
     }
 
-    if (network_type == "uv") {
-        app.server = std::make_shared<Afina::Network::UV::ServerImpl>(app.storage);
-    } else if (network_type == "blocking") {
+    if (network_type == "blocking") {
         app.server = std::make_shared<Afina::Network::Blocking::ServerImpl>(app.storage);
-#ifdef __linux__
     } else if (network_type == "epoll") {
         app.server = std::make_shared<Afina::Network::Epoll::ServerImpl>(app.storage);
-#endif
     } else {
         throw std::runtime_error("Unknown network type");
     }
@@ -165,25 +142,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Init local loop. It will react to signals and performs some metrics collections. Each
-    // subsystem is able to push metrics actively, but some metrics could be collected only
-    // by polling, so loop here will does that work
-    uv_loop_t loop;
-    uv_loop_init(&loop);
-
-    uv_signal_t sig_term, sig_int;
-    uv_signal_init(&loop, &sig_term);
-    uv_signal_start(&sig_term, signal_handler, SIGTERM);
-    uv_signal_init(&loop, &sig_int);
-    uv_signal_start(&sig_int, signal_handler, SIGINT);
-    sig_term.data = &app;
-    sig_int.data = &app;
-
-    uv_timer_t timer;
-    uv_timer_init(&loop, &timer);
-    timer.data = &app;
-    uv_timer_start(&timer, timer_handler, 0, 5000);
-
     // Start services
     try {
         app.storage->Start();
@@ -191,7 +149,8 @@ int main(int argc, char **argv) {
 
         // Freeze current thread and process events
         std::cout << "Application started" << std::endl;
-        uv_run(&loop, UV_RUN_DEFAULT);
+
+#error TODO: epoll loop to catch signals and run periodic tasks
 
         // Stop services
         app.server->Stop();
@@ -203,11 +162,8 @@ int main(int argc, char **argv) {
         std::cerr << "Fatal error" << e.what() << std::endl;
     }
 
-    uv_timer_stop(&timer);
-    uv_signal_stop(&sig_term);
-    uv_signal_stop(&sig_int);
-    if (uv_loop_close(&loop))
-        std::cerr << "uv_loop_close reports unclosed handles/requests" << std::endl;
+    if (app.pidfile.size())
+        unlink(app.pidfile.c_str());
 
     return 0;
 }

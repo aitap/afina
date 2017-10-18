@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.0.2 FATAL_ERROR)
 project(afina LANGUAGES C CXX)
 
+if (NOT ${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+	message(FATAL_ERROR "This project depends on epoll which is only available on Linux")
+endif()
+
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99 -Wall -Werror -fPIC")
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
