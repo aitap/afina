@@ -176,7 +176,7 @@ struct client_fd : ep_fd {
                         parser.Reset();
                         if (body_size) {
                             // supply the body
-                            std::string body{buf.data(), body_size};
+                            body.assign(buf.data(), body_size);
                             buf.erase(buf.begin(), buf.begin() + body_size + 2);
                             offset -= (body_size + 2);
                         }
