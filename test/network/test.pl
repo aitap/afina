@@ -4,7 +4,7 @@ use warnings;
 use threads;
 use threads::shared;
 use IPC::Open3;
-use Test::More tests => 21;
+use Test::More tests => 25;
 use IO::Socket::INET;
 
 my $pid = open3(my $stdin, my $stdout, 0, qw(src/afina -n blocking));
@@ -75,6 +75,17 @@ afina_test(
 	."get foo\r\n",
 	"STORED\r\n"
 	."VALUE foo 0 3\r\nwtf\r\nEND\r\n"
+);
+
+afina_test(
+	"set foo 0 0 3\r\nwtf\r\n"
+	."set bar 0 0 3\r\nzzz\r\n"
+	."get foo bar\r\n",
+	"STORED\r\n"
+	."STORED\r\n"
+	."VALUE foo 0 3\r\nwtf\r\n"
+	."VALUE bar 0 3\r\nzzz\r\n"
+	."END\r\n"
 );
 
 ok(kill('KILL', $pid), "Stopped Afina");
