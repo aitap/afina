@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-use 5.020;
+use 5.016;
 use warnings;
 use threads;
 use threads::shared;
