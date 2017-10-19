@@ -3,8 +3,9 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
-#include <signal.h> // sigset_t
-#include <stdlib.h> // realpath
+#include <pthread.h> // pthread_sigmask
+#include <signal.h>  // sigset_t
+#include <stdlib.h>  // realpath
 #include <sys/epoll.h>
 #include <sys/signalfd.h>
 #include <sys/stat.h>  // umask
@@ -180,7 +181,7 @@ int main(int argc, char **argv) {
         sigemptyset(&signals);
         sigaddset(&signals, SIGTERM);
         sigaddset(&signals, SIGINT);
-        if (sigprocmask(SIG_BLOCK, &signals, nullptr))
+        if (pthread_sigmask(SIG_BLOCK, &signals, nullptr)) // child threads should inherit parent signal masks
             throw std::runtime_error("failed to block TERM & INT");
         int sigfd = signalfd(-1, &signals, SFD_NONBLOCK);
         if (sigfd == -1)
