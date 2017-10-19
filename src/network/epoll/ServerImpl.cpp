@@ -58,9 +58,13 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
 
     sigset_t sig_mask;
     sigemptyset(&sig_mask);
+    // NOTE: normally, this wouldn't be needed, but libbackward seems to override the blocked signals
     sigaddset(&sig_mask, SIGPIPE);
+    sigaddset(&sig_mask, SIGTERM);
+    sigaddset(&sig_mask, SIGINT);
+    sigaddset(&sig_mask, SIGHUP);
     if (pthread_sigmask(SIG_BLOCK, &sig_mask, NULL) != 0)
-        throw std::runtime_error("Unable to mask SIGPIPE");
+        throw std::runtime_error("Unable to mask signals");
 
     // Setup server parameters BEFORE thread is created, that will guarantee
     // variable value visibility
