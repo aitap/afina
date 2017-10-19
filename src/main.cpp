@@ -202,6 +202,8 @@ int main(int argc, char **argv) {
                 break;
             run_periodic(app);
         }
+        close(sigfd);
+        close(epollfd);
 
         // Stop services
         app.server->Stop();
