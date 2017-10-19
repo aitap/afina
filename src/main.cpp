@@ -36,7 +36,10 @@ int signal_handler(Application &app, int fd, sigset_t &signals) {
                                 // the supplied buffer.
             throw std::runtime_error("Short read from signalfd");
         if (sigismember(&signals, buf.ssi_signo) == 1)
-            return 1;
+            if (buf.ssi_signo == SIGHUP)
+                return 0;
+            else
+                return 1;
         else
             throw std::runtime_error("Caught a wrong signal");
     }
@@ -181,6 +184,8 @@ int main(int argc, char **argv) {
         sigemptyset(&signals);
         sigaddset(&signals, SIGTERM);
         sigaddset(&signals, SIGINT);
+        sigaddset(&signals, SIGHUP);
+        // we should block signals we want to read from signalfd
         if (pthread_sigmask(SIG_BLOCK, &signals, nullptr)) // child threads should inherit parent signal masks
             throw std::runtime_error("failed to block TERM & INT");
         int sigfd = signalfd(-1, &signals, SFD_NONBLOCK);
