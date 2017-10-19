@@ -3,10 +3,13 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
-#include <stdlib.h>    // realpath
+#include <signal.h> // sigset_t
+#include <stdlib.h> // realpath
+#include <sys/epoll.h>
+#include <sys/signalfd.h>
+#include <sys/stat.h>  // umask
 #include <sys/types.h> // getpid
 #include <unistd.h>    // getopt, unlink
-#include <uv.h>
 
 #include <cxxopts.hpp>
 
@@ -23,6 +26,26 @@ typedef struct {
     std::shared_ptr<Afina::Network::Server> server;
     std::string pidfile;
 } Application;
+
+int signal_handler(Application &app, int fd, sigset_t &signals) {
+    struct signalfd_siginfo buf;
+    ssize_t len;
+    while ((len = read(fd, &buf, sizeof(buf))) != -1) {
+        if (len != sizeof(buf)) // The read(2) returns information for as many  signals as are pending and will fit in
+                                // the supplied buffer.
+            throw std::runtime_error("Short read from signalfd");
+        if (sigismember(&signals, buf.ssi_signo) == 1)
+            return 1;
+        else
+            throw std::runtime_error("Caught a wrong signal");
+    }
+    if (errno != EAGAIN)
+        throw std::runtime_error("Read from signalfd failed");
+    // for now, this never happens, and calling the signal handler means we're terminating
+    return 0;
+}
+
+void run_periodic(Application &app) { std::cout << "Start passive metrics collection" << std::endl; }
 
 int main(int argc, char **argv) {
     // Build version
@@ -150,7 +173,35 @@ int main(int argc, char **argv) {
         // Freeze current thread and process events
         std::cout << "Application started" << std::endl;
 
-#error TODO: epoll loop to catch signals and run periodic tasks
+        // prepare to handle signals and run periodic tasks
+        // create sigfd to watch it via epoll
+        sigset_t signals;
+        // the following operations shouldn't fail because I'm using constants from the same headers
+        sigemptyset(&signals);
+        sigaddset(&signals, SIGTERM);
+        sigaddset(&signals, SIGINT);
+        if (sigprocmask(SIG_BLOCK, &signals, nullptr))
+            throw std::runtime_error("failed to block TERM & INT");
+        int sigfd = signalfd(-1, &signals, SFD_NONBLOCK);
+        if (sigfd == -1)
+            throw std::runtime_error("signalfd failed");
+        // create a epoll instance and use it to watch signalfd above
+        int epollfd = epoll_create1(0);
+        if (epollfd == -1)
+            throw std::runtime_error("epoll_create1 failed");
+        struct epoll_event sigevent = {EPOLLIN | EPOLLET, {nullptr}};
+        sigevent.data.fd = sigfd;
+        if (epoll_ctl(epollfd, EPOLL_CTL_ADD, sigfd, &sigevent))
+            throw std::runtime_error("failed to add signalfd to epoll set");
+
+        for (;;) {
+            int events = epoll_wait(epollfd, &sigevent, 1, 10000);
+            if (events == -1 && errno != EINTR) // timeout or signal
+                throw std::runtime_error("epoll_wait failed");
+            if (events && signal_handler(app, sigevent.data.fd, signals))
+                break;
+            run_periodic(app);
+        }
 
         // Stop services
         app.server->Stop();
