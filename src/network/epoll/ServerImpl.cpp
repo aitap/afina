@@ -253,7 +253,7 @@ struct listen_fd : ep_fd {
 };
 
 const size_t num_events = 10;   // events at a time
-const int epoll_timeout = 1000; // ms, to check every now and then that we still need to be running
+const int epoll_timeout = 5000; // ms, to check every now and then that we still need to be running
 
 // See Server.h
 void ServerImpl::RunEpoll() {
@@ -304,8 +304,12 @@ void ServerImpl::RunEpoll() {
         std::cout << "network debug: waiting for connection..." << std::endl;
         epoll_event events[num_events];
         int events_now = epoll_wait(epoll_sock, events, num_events, epoll_timeout);
-        if (events_now < 0)
-            throw std::runtime_error("epoll failed");
+        if (events_now < 0) {
+            if (errno == EINTR)
+                continue; // it happens, we'll probably get stopped by setting `running` to false soon
+            else
+                throw std::runtime_error("networking epoll returned error");
+        }
         for (int i = 0; i < events_now; i++)
             ((ep_fd *)events[i].data.ptr)->advance(events[i].events);
     }
