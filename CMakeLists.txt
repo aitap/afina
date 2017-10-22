@@ -40,7 +40,7 @@ set(gtest_disable_pthreads ON CACHE BOOL "Disable uses of pthreads in gtest.")
 add_subdirectory(third-party/googletest-release-1.8.0)
 
 ## Libuv
-add_subdirectory(third-party/libuv-1.11.0)
+#add_subdirectory(third-party/libuv-1.11.0)
 
 ## Stack traces
 add_subdirectory(third-party/backward-cpp)
