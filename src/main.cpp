@@ -25,27 +25,25 @@
 typedef struct {
     std::shared_ptr<Afina::Storage> storage;
     std::shared_ptr<Afina::Network::Server> server;
-    std::string pidfile;
 } Application;
 
 int signal_handler(Application &app, int fd, sigset_t &signals) {
     struct signalfd_siginfo buf;
     ssize_t len;
     while ((len = read(fd, &buf, sizeof(buf))) != -1) {
-        if (len != sizeof(buf)) // The read(2) returns information for as many  signals as are pending and will fit in
-                                // the supplied buffer.
+        // The read(1) returns information for as many signals as are pending and will fit in
+        // the supplied buffer.
+        if (len != sizeof(buf))
             throw std::runtime_error("Short read from signalfd");
-        if (sigismember(&signals, buf.ssi_signo) == 1)
-            if (buf.ssi_signo == SIGHUP)
-                return 0;
-            else
+        if (sigismember(&signals, buf.ssi_signo) == 1) {
+            if (buf.ssi_signo != SIGHUP) // for now
                 return 1;
-        else
-            throw std::runtime_error("Caught a wrong signal");
+        } else
+            throw std::runtime_error("Caught a wrong signal" + std::to_string(buf.ssi_signo));
     }
     if (errno != EAGAIN)
         throw std::runtime_error("Read from signalfd failed");
-    // for now, this never happens, and calling the signal handler means we're terminating
+    // somehow, all the signals we've caught were SIGHUP
     return 0;
 }
 
@@ -83,6 +81,7 @@ int main(int argc, char **argv) {
 
     // Start boot sequence
     Application app;
+    std::string pidfile;
 
     std::cout << "Starting " << app_string.str() << std::endl;
 
@@ -128,7 +127,7 @@ int main(int argc, char **argv) {
             if (!rpath)
                 throw std::runtime_error("Failed to get real path of PID file");
 
-            app.pidfile.assign(rpath.get());
+            pidfile.assign(rpath.get());
         }
         if (options.count("daemonize")) {
             // 1. fork() off to
@@ -195,8 +194,10 @@ int main(int argc, char **argv) {
         int epollfd = epoll_create1(0);
         if (epollfd == -1)
             throw std::runtime_error("epoll_create1 failed");
+        // two-stange initialization of the object because C++ doesn't allow filling second field of a union
         struct epoll_event sigevent = {EPOLLIN | EPOLLET, {nullptr}};
         sigevent.data.fd = sigfd;
+        // we'll reuse the struct sigevent inside the for loop
         if (epoll_ctl(epollfd, EPOLL_CTL_ADD, sigfd, &sigevent))
             throw std::runtime_error("failed to add signalfd to epoll set");
 
@@ -221,8 +222,8 @@ int main(int argc, char **argv) {
         std::cerr << "Fatal error" << e.what() << std::endl;
     }
 
-    if (app.pidfile.size())
-        unlink(app.pidfile.c_str());
+    if (pidfile.size())
+        unlink(pidfile.c_str());
 
     return 0;
 }
