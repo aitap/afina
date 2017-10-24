@@ -63,7 +63,7 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
     sigset_t sig_mask;
     sigemptyset(&sig_mask);
     sigaddset(&sig_mask, SIGPIPE);
-    if (pthread_sigmask(SIG_BLOCK, &sig_mask, NULL) != 0) {
+    if (pthread_sigmask(SIG_BLOCK, &sig_mask, nullptr) != 0) {
         throw std::runtime_error("Unable to mask SIGPIPE");
     }
 

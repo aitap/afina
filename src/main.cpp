@@ -170,12 +170,6 @@ int main(int argc, char **argv) {
 
     // Start services
     try {
-        app.storage->Start();
-        app.server->Start(8080, 10);
-
-        // Freeze current thread and process events
-        std::cout << "Application started" << std::endl;
-
         // prepare to handle signals and run periodic tasks
         // create sigfd to watch it via epoll
         sigset_t signals;
@@ -200,6 +194,12 @@ int main(int argc, char **argv) {
         // we'll reuse the struct sigevent inside the for loop
         if (epoll_ctl(epollfd, EPOLL_CTL_ADD, sigfd, &sigevent))
             throw std::runtime_error("failed to add signalfd to epoll set");
+
+        app.storage->Start();
+        app.server->Start(8080, 10);
+
+        // Freeze current thread and process events
+        std::cout << "Application started" << std::endl;
 
         for (;;) {
             int events = epoll_wait(epollfd, &sigevent, 1, 10000);
