@@ -12,6 +12,7 @@
 #include <netdb.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 
@@ -185,7 +186,20 @@ void ServerImpl::RunAcceptor() {
         std::cout << "network debug: waiting for connection..." << std::endl;
 
         // When an incoming connection arrives, accept it. The call to accept() blocks until
-        // the incoming connection arrives
+        // the incoming connection arrives...
+        // ...which I don't really want, so I use a select() loop with timeout.
+        fd_set accept_socket_set;
+        FD_ZERO(&accept_socket_set);
+        FD_SET(server_socket, &accept_socket_set);
+        // check `running` every 5 seconds
+        struct timeval timeout = {5, 0};
+        int select_ret = select(server_socket + 1, &accept_socket_set, nullptr, nullptr, &timeout);
+        if (select_ret < 0 && errno != EINTR)
+            throw std::runtime_error("Error while waiting for accept to become ready");
+        if (select_ret <= 0 /* fall through when EINTR */ || !FD_ISSET(server_socket, &accept_socket_set))
+            continue; // timeout, check if we're still running and continue
+
+        // else we actually have a client
         if ((client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &sinSize)) == -1) {
             close(server_socket);
             throw std::runtime_error("Socket accept() failed");
