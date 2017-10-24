@@ -43,7 +43,7 @@ int signal_handler(Application &app, int fd, sigset_t &signals) {
     }
     if (errno != EAGAIN)
         throw std::runtime_error("Read from signalfd failed");
-    // somehow, all the signals we've caught were SIGHUP
+    // falling through means we've only caught non-terminating signals
     return 0;
 }
 
@@ -198,9 +198,9 @@ int main(int argc, char **argv) {
         app.storage->Start();
         app.server->Start(8080, 10);
 
-        // Freeze current thread and process events
         std::cout << "Application started" << std::endl;
 
+        // Freeze current thread and process events
         for (;;) {
             int events = epoll_wait(epollfd, &sigevent, 1, 10000);
             if (events == -1 && errno != EINTR) // timeout or signal
