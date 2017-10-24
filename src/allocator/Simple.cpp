@@ -108,8 +108,8 @@ Simple::Simple(void *base, size_t size) : _base(base), _base_len(size) {
     /* Leave enough space for:
      * - the block descriptor
      * - the footer at the end of the memory area */
-    block *head = new (base) block{size - sizeof(footer) - sizeof(block)};
-    footer *ftr = new ((char *)base + size - sizeof(footer)) footer{base};
+    new (base) block{size - sizeof(footer) - sizeof(block)}; // the base free block
+    new ((char *)base + size - sizeof(footer)) footer{base}; // the footer
 }
 
 /**
