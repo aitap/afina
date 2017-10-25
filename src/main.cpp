@@ -33,7 +33,7 @@ struct epoll_event_handler {
     int fd;
     Application &app;
     epoll_event_handler(int fd_, Application &app_) : fd(fd_), app(app_) {}
-    virtual bool advance() = 0;
+    virtual bool advance() = 0; // returns true when it's time to stop the app
     virtual ~epoll_event_handler() {}
 };
 
@@ -47,7 +47,7 @@ struct epoll_signal : epoll_event_handler {
             // the supplied buffer.
             if (len != sizeof(buf))
                 throw std::runtime_error("Short read from signalfd");
-            if (buf.ssi_signo != SIGHUP) // for now
+            if (buf.ssi_signo != SIGHUP) // ignore SIGHUP for now; maybe there'll be some kind of semantics here later
                 return true;
         }
         if (errno != EAGAIN)
@@ -145,7 +145,7 @@ int main(int argc, char **argv) {
     {
         std::ofstream pfs;
         if (options.count("pidfile")) {
-            std::string pidfile = options["pidfile"].as<std::string>();
+            pidfile = options["pidfile"].as<std::string>();
             // real path storage
             std::unique_ptr<char, decltype(&std::free)> rpath{nullptr, &std::free};
             // create the pidfile and prepare to write
