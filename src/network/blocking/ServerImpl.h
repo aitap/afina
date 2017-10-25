@@ -2,8 +2,10 @@
 #define AFINA_NETWORK_BLOCKING_SERVER_H
 
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <pthread.h>
-#include <vector>
+#include <unordered_set>
 
 #include <afina/network/Server.h>
 
@@ -59,7 +61,7 @@ private:
 
     // Threads that are talking to clients
     // NOTE: access is permitted only from inside of accept_thread
-    std::vector<pthread_t> connections;
+    std::unordered_set<pthread_t> connections;
 
     // Maximum number of client allowed to exist concurrently
     // on the server

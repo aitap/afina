@@ -232,15 +232,15 @@ void ServerImpl::RunAcceptor() {
             continue;
         }
 
-        auto it = connections.emplace(connections.end());
+        pthread_t new_thread;
         client_okay = false;
-        if (pthread_create(&*it /* yeah, it's a pointer to a dereferenced iterator */, NULL,
-                           PthreadProxy<&ServerImpl::RunConnection>, this) < 0) {
+        if (pthread_create(&new_thread, nullptr, PthreadProxy<&ServerImpl::RunConnection>, this) < 0) {
             throw std::runtime_error("couldn't create client socket thread failed");
         }
         while (!client_okay) // make sure that the client thread gets the socket
             if (pthread_cond_wait(&client_socket_cv, &client_socket_lock))
                 throw std::runtime_error("couldn't wait on client socket condvar");
+        connections.insert(new_thread);
     }
 
     // Cleanup on exit...
@@ -251,7 +251,7 @@ void ServerImpl::RunAcceptor() {
         throw std::runtime_error("couldn't unlock client socket mutex");
 
     // at this point we have to clean up all client threads
-    for (pthread_t &thread : connections) {
+    for (pthread_t thread : connections) { // screw it, make a copy
         void *retval;
         if (pthread_join(thread, &retval))
             throw std::runtime_error("failed to join a dead client thread");

@@ -20,6 +20,7 @@
 
 #include "network/blocking/ServerImpl.h"
 #include "network/epoll/ServerImpl.h"
+#include "network/nonblocking/ServerImpl.h"
 #include "storage/MapBasedGlobalLockImpl.h"
 
 typedef struct {
@@ -107,6 +108,8 @@ int main(int argc, char **argv) {
         app.server = std::make_shared<Afina::Network::Blocking::ServerImpl>(app.storage);
     } else if (network_type == "epoll") {
         app.server = std::make_shared<Afina::Network::Epoll::ServerImpl>(app.storage);
+    } else if (network_type == "nonblocking") {
+        app.server = std::make_shared<Afina::Network::NonBlocking::ServerImpl>(app.storage);
     } else {
         throw std::runtime_error("Unknown network type");
     }
