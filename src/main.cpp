@@ -8,7 +8,8 @@
 #include <stdlib.h>  // realpath
 #include <sys/epoll.h>
 #include <sys/signalfd.h>
-#include <sys/stat.h>  // umask
+#include <sys/stat.h> // umask
+#include <sys/timerfd.h>
 #include <sys/types.h> // getpid
 #include <unistd.h>    // getopt, unlink
 
@@ -28,27 +29,51 @@ typedef struct {
     std::shared_ptr<Afina::Network::Server> server;
 } Application;
 
-int signal_handler(Application &app, int fd, sigset_t &signals) {
-    struct signalfd_siginfo buf;
-    ssize_t len;
-    while ((len = read(fd, &buf, sizeof(buf))) != -1) {
-        // The read(1) returns information for as many signals as are pending and will fit in
-        // the supplied buffer.
-        if (len != sizeof(buf))
-            throw std::runtime_error("Short read from signalfd");
-        if (sigismember(&signals, buf.ssi_signo) == 1) {
-            if (buf.ssi_signo != SIGHUP) // for now
-                return 1;
-        } else
-            throw std::runtime_error("Caught a wrong signal" + std::to_string(buf.ssi_signo));
-    }
-    if (errno != EAGAIN)
-        throw std::runtime_error("Read from signalfd failed");
-    // falling through means we've only caught non-terminating signals
-    return 0;
-}
+struct epoll_event_handler {
+    int fd;
+    Application &app;
+    epoll_event_handler(int fd_, Application &app_) : fd(fd_), app(app_) {}
+    virtual bool advance() = 0;
+    virtual ~epoll_event_handler() {}
+};
 
-void run_periodic(Application &app) { std::cout << "Start passive metrics collection" << std::endl; }
+struct epoll_signal : epoll_event_handler {
+    epoll_signal(int fd, Application &app) : epoll_event_handler(fd, app) {}
+    bool advance() override {
+        struct signalfd_siginfo buf;
+        ssize_t len;
+        while ((len = read(fd, &buf, sizeof(buf))) != -1) {
+            // The read(1) returns information for as many signals as are pending and will fit in
+            // the supplied buffer.
+            if (len != sizeof(buf))
+                throw std::runtime_error("Short read from signalfd");
+            if (buf.ssi_signo != SIGHUP) // for now
+                return true;
+        }
+        if (errno != EAGAIN)
+            throw std::runtime_error("Read from signalfd failed");
+        // falling through means we've only caught non-terminating signals
+        return false;
+    }
+};
+
+struct epoll_timer : epoll_event_handler {
+    epoll_timer(int fd, Application &app) : epoll_event_handler(fd, app) {}
+    bool advance() override {
+        uint64_t dummy;
+        ssize_t len;
+        // buffer given to read(2) returns an unsigned 8-byte integer (uint64_t) containing the number of
+        // expirations that  have  occurred
+        while ((len = read(fd, &dummy, sizeof(dummy))) != -1) {
+            if (len != sizeof(dummy))
+                throw std::runtime_error("Short read from timerfd");
+        }
+        if (errno != EAGAIN)
+            throw std::runtime_error("Read from signalfd failed");
+        std::cout << "Start passive metrics collection" << std::endl;
+        return false;
+    }
+};
 
 int main(int argc, char **argv) {
     // Build version
@@ -187,15 +212,28 @@ int main(int argc, char **argv) {
         int sigfd = signalfd(-1, &signals, SFD_NONBLOCK);
         if (sigfd == -1)
             throw std::runtime_error("signalfd failed");
+
         // create a epoll instance and use it to watch signalfd above
         int epollfd = epoll_create1(0);
         if (epollfd == -1)
             throw std::runtime_error("epoll_create1 failed");
-        // two-stange initialization of the object because C++ doesn't allow filling second field of a union
-        struct epoll_event sigevent = {EPOLLIN | EPOLLET, {nullptr}};
-        sigevent.data.fd = sigfd;
-        // we'll reuse the struct sigevent inside the for loop
-        if (epoll_ctl(epollfd, EPOLL_CTL_ADD, sigfd, &sigevent))
+
+        // add the signalfd to the epoll
+        // (we'll reuse our struct sigevent inside the for loop)
+        epoll_signal sig_object{sigfd, app};
+        struct epoll_event event = {EPOLLIN | EPOLLET, {(void *)&sig_object}};
+        if (epoll_ctl(epollfd, EPOLL_CTL_ADD, sigfd, &event))
+            throw std::runtime_error("failed to add signalfd to epoll set");
+
+        // employ a timerfd to run my periodic tasks
+        int periodic_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+        struct itimerspec periodic_interval = {{10, 0}, {10, 0}};
+        if (timerfd_settime(periodic_fd, 0, &periodic_interval, nullptr))
+            throw std::runtime_error("failed to set periodic timer interval");
+        // add the timerfd to the epoll, too
+        epoll_timer tmr_object{periodic_fd, app};
+        event.data.ptr = (void *)&tmr_object;
+        if (epoll_ctl(epollfd, EPOLL_CTL_ADD, periodic_fd, &event))
             throw std::runtime_error("failed to add signalfd to epoll set");
 
         app.storage->Start();
@@ -205,13 +243,15 @@ int main(int argc, char **argv) {
 
         // Freeze current thread and process events
         for (;;) {
-            int events = epoll_wait(epollfd, &sigevent, 1, 10000);
+            int events = epoll_wait(epollfd, &event, 1, 10000);
             if (events == -1 && errno != EINTR) // timeout or signal
                 throw std::runtime_error("epoll_wait failed");
-            if (events && signal_handler(app, sigevent.data.fd, signals))
+            if (((epoll_event_handler *)event.data.ptr)->advance())
                 break;
-            run_periodic(app);
         }
+
+        // time to clean up
+        close(periodic_fd);
         close(sigfd);
         close(epollfd);
 

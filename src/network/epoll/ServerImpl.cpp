@@ -307,7 +307,6 @@ void ServerImpl::RunEpoll() {
 
     // main loop
     while (running.load()) {
-        std::cout << "network debug: waiting for connection..." << std::endl;
         epoll_event events[num_events];
         int events_now = epoll_wait(epoll_sock, events, num_events, epoll_timeout);
         if (events_now < 0) {
