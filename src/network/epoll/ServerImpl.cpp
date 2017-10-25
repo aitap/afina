@@ -69,9 +69,11 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
     else
         throw std::overflow_error("port wouldn't fit in a 16-bit value");
 
+    workers.resize(n_workers);
     running.store(true);
-    if (pthread_create(&epoll_thread, NULL, &PthreadProxy<&ServerImpl::RunEpoll>, this) < 0)
-        throw std::runtime_error("Could not create epoll thread");
+    for (uint16_t i = 0; i < n_workers; i++)
+        if (pthread_create(&workers[i], NULL, &PthreadProxy<&ServerImpl::RunEpoll>, this) < 0)
+            throw std::runtime_error("Could not create epoll thread");
 }
 
 // See Server.h
@@ -84,10 +86,13 @@ void ServerImpl::Stop() {
 void ServerImpl::Join() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
     void *retval;
-    if (pthread_join(epoll_thread, &retval))
-        throw std::runtime_error("pthread_join failed");
-    if (retval) // better late than never
-        throw std::runtime_error("epoll thread had encountered an error");
+    for (pthread_t &epoll_thread : workers) {
+        if (pthread_join(epoll_thread, &retval))
+            throw std::runtime_error("pthread_join failed");
+        if (retval) // better late than never
+            throw std::runtime_error("epoll thread had encountered an error");
+    }
+    workers.clear();
 }
 
 static int setsocknonblocking(int sock) {
@@ -269,8 +274,13 @@ void ServerImpl::RunEpoll() {
         throw std::runtime_error("Failed to open socket");
     }
 
-    int reuseaddr = 1;
+    int reuseaddr = 1, reuseport = 1;
     if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &reuseaddr, sizeof(reuseaddr)) == -1) {
+        close(server_socket);
+        throw std::runtime_error("Socket setsockopt() failed");
+    }
+
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEPORT, &reuseport, sizeof(reuseport)) == -1) {
         close(server_socket);
         throw std::runtime_error("Socket setsockopt() failed");
     }

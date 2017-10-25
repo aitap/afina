@@ -41,7 +41,7 @@ private:
     std::atomic<bool> running;
 
     // Thread accepting and crunching client connections
-    pthread_t epoll_thread;
+    std::vector<pthread_t> workers;
 
     // Port number to listen on
     uint16_t listen_port;
