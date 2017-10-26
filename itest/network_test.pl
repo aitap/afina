@@ -91,13 +91,15 @@ afina_test("set foo 0 0 6\r\nfoobar\r\n", "STORED\r\n", "Set command");
 afina_test("get foo\r\n", "VALUE foo 0 6\r\nfoobar\r\nEND\r\n", "Get the value we just set");
 afina_test("get foo\r\nget foo\r\n", "VALUE foo 0 6\r\nfoobar\r\nEND\r\nVALUE foo 0 6\r\nfoobar\r\nEND\r\n", "Multiple commands");
 
-my %par_responses;
-$par_responses{$_}++ for (map { $_->join } map { threads::->create(\&afina_request_silent, $_) } map { sprintf "set bar 0 0 3\r\n%03d\r\n", $_ } 1..100);
-note "Parallel test responses:";
-for (sort { $par_responses{$a} <=> $par_responses{$b} } keys %par_responses) {
-	note "$par_responses{$_} ".($_=~s/([\r\n])/{"\r"=>'\r',"\n"=>'\n'}->{$1}/megr)."\n"
+{
+	my %par_responses;
+	$par_responses{$_}++ for (map { @{$_->join} } map { async { [ map { afina_request_silent "set bar 0 0 3\r\nWTF\r\n" } 1..100 ] } } 1..10);
+	note "Parallel test responses:";
+	for (sort { $par_responses{$a} <=> $par_responses{$b} } keys %par_responses) {
+		note "$par_responses{$_} ".($_=~s/([\r\n])/{"\r"=>'\r',"\n"=>'\n'}->{$1}/megr)."\n"
+	}
+	ok($par_responses{"STORED\r\n"}, "Afina replied with 'STORED' at least once");
 }
-ok($par_responses{"STORED\r\n"}, "Afina replied with 'STORED' at least once");
 
 afina_test(
 	"set foo 0 0 3\r\nwtf\r\n"
