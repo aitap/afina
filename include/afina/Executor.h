@@ -73,15 +73,18 @@ private:
      */
     void perform();
 
+    // This function waits for all child threads to terminate
+    void await_unlocked(std::unique_lock<std::mutex> &);
+
     /**
      * Mutex to protect state below from concurrent modification
      */
-    std::recursive_mutex mutex;
+    std::mutex mutex;
 
     /**
      * Conditional variable to await new data in case of empty queue
      */
-    std::condition_variable_any empty_condition;
+    std::condition_variable empty_condition;
 
     /**
      * Vector of actual threads that perorm execution
