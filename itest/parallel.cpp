@@ -85,7 +85,7 @@ int main (int argc, char** argv) {
 
 	std::vector<std::future<std::string>> results;
 	for (size_t i = 0; i < num_threads; i++)
-		results.push_back(std::move(std::async(afina_request, (sockaddr*)&addr, request.data(), request.size(), &barrier)));
+		results.push_back(std::move(std::async(std::launch::async, afina_request, (sockaddr*)&addr, request.data(), request.size(), &barrier)));
 
 	std::unordered_map<std::string, size_t> statistics;
 	for (auto & res : results)
