@@ -80,7 +80,7 @@ private:
     /**
      * Conditional variable to await new data in case of empty queue
      */
-    std::condition_variable empty_condition;
+    std::condition_variable_any empty_condition;
 
     /**
      * Vector of actual threads that perorm execution
