@@ -38,7 +38,7 @@ public:
         // Prepare "task"
         auto exec = std::bind(std::forward<F>(func), std::forward<Types>(args)...);
 
-        std::unique_lock<std::recursive_mutex> lock(mutex);
+        std::unique_lock<std::mutex> lock(mutex);
         if (state != State::kRun) {
             return false;
         }
