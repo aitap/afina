@@ -49,7 +49,7 @@ class Executor {
         // Prepare "task"
         auto exec = std::bind(std::forward<F>(func), std::forward<Types>(args)...);
 
-        std::unique_lock<std::mutex> lock(this->mutex);
+        std::unique_lock<std::recursive_mutex> lock(this->mutex);
         if (state != State::kRun) {
             return false;
         }
@@ -75,7 +75,7 @@ private:
     /**
      * Mutex to protect state below from concurrent modification
      */
-    std::mutex mutex;
+    std::recursive_mutex mutex;
 
     /**
      * Conditional variable to await new data in case of empty queue
