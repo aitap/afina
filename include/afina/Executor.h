@@ -15,18 +15,7 @@ namespace Afina {
  * # Thread pool
  */
 class Executor {
-    enum class State {
-        // Threadpool is fully operational, tasks could be added and get executed
-        kRun,
-
-        // Threadpool is on the way to be shutdown, no ned task could be added, but existing will be
-        // completed as requested
-        kStopping,
-
-        // Threadppol is stopped
-        kStopped
-    };
-
+public:
     Executor(std::string name, int size);
     ~Executor();
 
@@ -49,7 +38,7 @@ class Executor {
         // Prepare "task"
         auto exec = std::bind(std::forward<F>(func), std::forward<Types>(args)...);
 
-        std::unique_lock<std::recursive_mutex> lock(this->mutex);
+        std::unique_lock<std::recursive_mutex> lock(mutex);
         if (state != State::kRun) {
             return false;
         }
@@ -61,6 +50,18 @@ class Executor {
     }
 
 private:
+    enum class State {
+        // Threadpool is fully operational, tasks could be added and get executed
+        kRun,
+
+        // Threadpool is on the way to be shutdown, no ned task could be added, but existing will be
+        // completed as requested
+        kStopping,
+
+        // Threadppol is stopped
+        kStopped
+    };
+
     // No copy/move/assign allowed
     Executor(const Executor &);            // = delete;
     Executor(Executor &&);                 // = delete;
@@ -70,7 +71,7 @@ private:
     /**
      * Main function that all pool threads are running. It polls internal task queue and execute tasks
      */
-    friend void perform(Executor *executor);
+    void perform();
 
     /**
      * Mutex to protect state below from concurrent modification

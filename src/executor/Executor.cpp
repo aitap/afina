@@ -2,17 +2,16 @@
 
 namespace Afina {
 
-void perform(Afina::Executor *executor) {
+void Executor::perform() {
     // not just the lock_guard because we use CVs and will unlock the mutex while user function is running
-    std::unique_lock<std::recursive_mutex> lock{executor->mutex};
+    std::unique_lock<std::recursive_mutex> lock{mutex};
     for (;;) {
         // if queue is empty, wait for it to be filled or for the pool to be drained
-        executor->empty_condition.wait(
-            lock, [&executor] { return executor->tasks.size() || executor->state != Executor::State::kRun; });
-        if (executor->state != Executor::State::kRun)
+        empty_condition.wait(lock, [this] { return tasks.size() || state != Executor::State::kRun; });
+        if (state != Executor::State::kRun)
             return; // abandon ship!
-        auto f = std::move(executor->tasks.front());
-        executor->tasks.pop_front();
+        auto f = std::move(tasks.front());
+        tasks.pop_front();
         lock.unlock(); // don't need that while user code is running
         f();
         lock.lock();
@@ -22,7 +21,7 @@ void perform(Afina::Executor *executor) {
 Executor::Executor(std::string /* wtf?! */, int size) {
     std::lock_guard<std::recursive_mutex> lock{mutex};
     for (int i = 0; i < size; i++)
-        threads.emplace(threads.end(), perform, this);
+        threads.emplace(threads.end(), &Executor::perform, this);
 }
 
 void Executor::Stop(bool await) {
