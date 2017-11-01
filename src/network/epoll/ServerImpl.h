@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <pthread.h>
+#include <string>
 #include <vector>
 
 #include <afina/network/Server.h>
@@ -27,6 +28,9 @@ public:
 
     // See Server.h
     void Join() override;
+
+    // enables listening on a FIFO in addition to network
+    void set_fifo(std::string path);
 
 protected:
     /**

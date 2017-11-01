@@ -93,6 +93,7 @@ int main(int argc, char **argv) {
         options.add_options()("n,network", "Type of network service to use", cxxopts::value<std::string>());
         options.add_options()("d,daemonize", "Daemonize to background"); // boolean by default
         options.add_options()("p,pidfile", "Path of pidfile", cxxopts::value<std::string>());
+        options.add_options()("f,fifo", "Path to a FIFO to read commands from", cxxopts::value<std::string>());
         options.add_options()("h,help", "Print usage info");
         options.parse(argc, argv);
 
@@ -237,6 +238,14 @@ int main(int argc, char **argv) {
             throw std::runtime_error("failed to add signalfd to epoll set");
 
         app.storage->Start();
+        if (options.count("fifo")) {
+            std::string pipe = options["fifo"].as<std::string>();
+            Afina::Network::Epoll::ServerImpl *s = dynamic_cast<Afina::Network::Epoll::ServerImpl *>(app.server.get());
+            if (!s) {
+                throw std::runtime_error("FIFO is only supported in epoll backend");
+            }
+            s->set_fifo(pipe);
+        }
         app.server->Start(8080, 10);
 
         std::cout << "Application started" << std::endl;

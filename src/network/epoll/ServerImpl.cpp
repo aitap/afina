@@ -330,6 +330,10 @@ void ServerImpl::RunEpoll() {
     close(epoll_sock);
 }
 
+void ServerImpl::set_fifo(std::string path) {
+    throw; // unimplemented
+}
+
 } // namespace Blocking
 } // namespace Network
 } // namespace Afina
