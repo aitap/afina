@@ -2,6 +2,7 @@
 #define AFINA_NETWORK_EPOLL_SERVER_H
 
 #include <atomic>
+#include <mutex>
 #include <pthread.h>
 #include <string>
 #include <vector>
@@ -49,6 +50,15 @@ private:
 
     // Port number to listen on
     uint16_t listen_port;
+
+    // path to the FIFO to listen on
+    std::string fifo_path;
+
+    // FIFO fd to listen on, -1 if none needed
+    int fifo_fd;
+
+    // mutex for a single thread to access the fifo fd
+    std::mutex fifo_lock;
 };
 
 } // namespace Blocking

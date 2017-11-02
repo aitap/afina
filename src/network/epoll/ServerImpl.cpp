@@ -16,6 +16,7 @@
 #include <netdb.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 
 #include <arpa/inet.h>
@@ -50,7 +51,11 @@ template <void (ServerImpl::*method)()> static void *PthreadProxy(void *p) {
 ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps) : Server(ps) {}
 
 // See Server.h
-ServerImpl::~ServerImpl() {}
+ServerImpl::~ServerImpl() {
+    if (fifo_path.size()) {
+        unlink(fifo_path.c_str());
+    }
+}
 
 // See Server.h
 void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
@@ -331,7 +336,33 @@ void ServerImpl::RunEpoll() {
 }
 
 void ServerImpl::set_fifo(std::string path) {
-    throw; // unimplemented
+    // tedious checking that everything is okay
+    if (mkfifo(path.c_str(), 0660) && errno != EEXIST) {
+        throw std::runtime_error("FIFO doesn't exist and I couldn't create one");
+    }
+    fifo_fd = open(path.c_str(), O_NONBLOCK, O_RDONLY);
+    if (fifo_fd < 0) {
+        throw std::runtime_error("Couldn't open FIFO fd");
+    }
+
+    // but is it a FIFO?
+    struct stat fifo_stat;
+    if (fstat(fifo_fd, &fifo_stat)) {
+        close(fifo_fd);
+        fifo_fd = -1;
+        throw std::runtime_error("Couldn't perform stat() on an opened FIFO! WTF?!");
+    }
+
+    if (!S_ISFIFO(fifo_stat.st_mode)) {
+        close(fifo_fd);
+        fifo_fd = -1;
+        throw std::runtime_error("File is not a FIFO");
+    }
+
+    // finally!
+    fifo_path = path;
+
+    // TODO: needs child-thread-side support
 }
 
 } // namespace Blocking
