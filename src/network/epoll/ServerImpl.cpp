@@ -48,7 +48,7 @@ template <void (ServerImpl::*method)()> static void *PthreadProxy(void *p) {
 }
 
 // See Server.h
-ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps) : Server(ps) {}
+ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps) : Server(ps), fifo_fd(-1) {}
 
 // See Server.h
 ServerImpl::~ServerImpl() {
@@ -110,7 +110,9 @@ static int setsocknonblocking(int sock) {
 
 struct ep_fd {
     int fd;
-    ep_fd(int fd_) : fd(fd_) {}
+    int epoll_fd;
+    std::shared_ptr<Afina::Storage> ps;
+    ep_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_) : fd(fd_), epoll_fd(epoll_fd_), ps(ps_) {}
     virtual void advance(uint32_t) = 0;
     virtual ~ep_fd() {}
 };
@@ -126,8 +128,6 @@ static int epoll_modify(int epoll_fd, int how, uint32_t events, ep_fd &target) {
 static const size_t buffer_size = 16;
 
 struct client_fd : ep_fd {
-    int epoll_fd;
-    std::shared_ptr<Afina::Storage> ps;
     std::vector<char> buf;
     size_t offset;
     std::string out;
@@ -137,7 +137,7 @@ struct client_fd : ep_fd {
     Protocol::Parser parser;
     client_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_fd> &list_,
               std::list<client_fd>::iterator self_)
-        : ep_fd(fd_), epoll_fd(epoll_fd_), ps(ps_), offset(0), list(list_), self(self_), bailout(false) {
+        : ep_fd(fd_, epoll_fd_, ps_), offset(0), list(list_), self(self_), bailout(false) {
         buf.resize(buffer_size);
     }
     void cleanup() {
@@ -224,11 +224,9 @@ struct client_fd : ep_fd {
 };
 
 struct listen_fd : ep_fd {
-    int epoll_fd;
-    std::shared_ptr<Afina::Storage> ps;
     std::list<client_fd> &client_list;
     listen_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_fd> &client_list_)
-        : ep_fd(fd_), epoll_fd(epoll_fd_), ps(ps_), client_list(client_list_) {}
+        : ep_fd(fd_, epoll_fd_, ps_), client_list(client_list_) {}
     void advance(uint32_t events) override {
         if (events & (EPOLLHUP | EPOLLERR)) {
             close(fd);
@@ -255,6 +253,28 @@ struct listen_fd : ep_fd {
         // oh well
         close(fd);
         throw std::runtime_error("Socket accept() failed");
+    }
+};
+
+struct pipe_fd : ep_fd {
+    std::vector<char> buf;
+    size_t offset;
+    std::string out;
+    bool bailout;
+    Protocol::Parser parser;
+    pipe_fd(int pipe_, int epoll_, std::shared_ptr<Afina::Storage> ps_) : ep_fd(pipe_, epoll_, ps_) {}
+    void reopen(mode_t mode);
+    void advance(uint32_t events) override {
+        if (events & (EPOLLHUP | EPOLLERR)) {
+            close(fd);
+            throw std::runtime_error("Caught error state on listen socket");
+        }
+        if (events & EPOLLIN) {
+            // TODO: read until EOF, then execute commands and reopen to write
+        } else if (events & EPOLLOUT) {
+            // TODO: write all output, then reopen to read
+        }
+        throw; // TODO
     }
 };
 
@@ -310,6 +330,19 @@ void ServerImpl::RunEpoll() {
     if (epoll_modify(epoll_sock, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, listening_object))
         throw std::runtime_error("epoll_ctl failed to add the listen socket");
 
+    pipe_fd fifo_handler{-1, epoll_sock, pStorage};
+    {
+        // maybe there's a FIFO waiting for us?
+        std::lock_guard<std::mutex> lock{fifo_lock};
+        if (fifo_fd >= 0) { // and we're the one to handle it?
+            fifo_handler.fd = fifo_fd;
+            if (epoll_modify(epoll_sock, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, fifo_handler))
+                throw std::runtime_error("epoll_ctl failed to add the fifo fd");
+            // my preciousssss
+            fifo_fd = -1;
+        }
+    }
+
     // main loop
     while (running.load()) {
         epoll_event events[num_events];
@@ -361,8 +394,6 @@ void ServerImpl::set_fifo(std::string path) {
 
     // finally!
     fifo_path = path;
-
-    // TODO: needs child-thread-side support
 }
 
 } // namespace Blocking
