@@ -48,12 +48,14 @@ template <void (ServerImpl::*method)()> static void *PthreadProxy(void *p) {
 }
 
 // See Server.h
-ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps) : Server(ps), fifo_fd(-1) {}
+ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps) : Server(ps), fifo_read_fd(-1), fifo_write_fd(-1) {}
 
 // See Server.h
 ServerImpl::~ServerImpl() {
-    if (fifo_path.size()) {
-        unlink(fifo_path.c_str());
+    for (const std::string &p : {fifo_read_path, fifo_write_path}) {
+        if (p.size()) {
+            unlink(p.c_str());
+        }
     }
 }
 
@@ -244,34 +246,32 @@ struct client_socket : client_fd {
 
 struct client_fifo : client_fd {
     std::string fifo_path;
-    client_fifo(int pipe_, int epoll_, std::shared_ptr<Afina::Storage> ps_) : client_fd(pipe_, epoll_, ps_) {}
+    client_fifo(int epoll_, std::shared_ptr<Afina::Storage> ps_) : client_fd(-1, epoll_, ps_) {}
 
     void die(const char *what) {
         close(fd);
         throw std::runtime_error(what);
     }
 
-    void switch_mode(uint32_t events) {
-        std::cerr << "epoll mode -> events=" << events << std::endl;
-        if (epoll_modify(epoll_fd, EPOLL_CTL_MOD, events | EPOLLET, *this)) {
-            die("Failed to switch the epoll event set of the FIFO fd");
-        }
+    void enable(int read_fd_, int write_fd_) {
+        throw; // TODO
     }
 
     void cleanup() { // this client is busted, but we can try again
-        std::cerr << errno << "<-errno; cleaning up FIFO" << std::endl;
         out.clear();
         offset = 0;
         bailout = false;
         parser.Reset();
-        if (close(fd))
-            throw std::runtime_error("Failed to close FIFO fd");
-        fd = open(fifo_path.c_str(), O_NONBLOCK | O_RDWR);
-        if (fd == -1)
-            throw std::runtime_error("Couldn't reopen FIFO fd");
-        if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, *this)) {
-            die("Failed to readd new FIFO fd to the epoll set");
-        }
+        /*
+if (close(read_fd))
+    throw std::runtime_error("Failed to close FIFO fd");
+fd = open(fifo_path.c_str(), O_NONBLOCK | O_RDWR);
+if (fd == -1)
+    throw std::runtime_error("Couldn't reopen FIFO fd");
+if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, *this)) {
+    die("Failed to readd new FIFO fd to the epoll set");
+}
+        */
     }
 
     void advance(uint32_t events) override {
@@ -386,17 +386,14 @@ void ServerImpl::RunEpoll() {
     if (epoll_modify(epoll_sock, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, listening_object))
         throw std::runtime_error("epoll_ctl failed to add the listen socket");
 
-    client_fifo fifo_handler{-1, epoll_sock, pStorage};
+    client_fifo fifo_handler{epoll_sock, pStorage};
     {
         // maybe there's a FIFO waiting for us?
         std::lock_guard<std::mutex> lock{fifo_lock};
-        if (fifo_fd >= 0) { // and we're the one to handle it?
-            fifo_handler.fd = fifo_fd;
-            fifo_handler.fifo_path = fifo_path;
-            if (epoll_modify(epoll_sock, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT | EPOLLET, fifo_handler))
-                throw std::runtime_error("epoll_ctl failed to add the fifo fd");
-            // my preciousssss
-            fifo_fd = -1;
+        // it's set_fifo's job to make sure that either 2 FIFOs are open or none at all
+        if (fifo_read_fd >= 0 && fifo_write_fd >= 0) {
+            fifo_handler.enable(fifo_read_fd, fifo_write_fd);
+            fifo_write_fd = fifo_read_fd = -1;
         }
     }
 
@@ -428,32 +425,35 @@ void ServerImpl::RunEpoll() {
     close(epoll_sock);
 }
 
-void ServerImpl::set_fifo(std::string path) {
-    // tedious checking that everything is okay
-    if (mkfifo(path.c_str(), 0660) && errno != EEXIST) {
-        throw std::runtime_error("FIFO doesn't exist and I couldn't create one");
-    }
-    fifo_fd = open(path.c_str(), O_NONBLOCK | O_RDWR);
-    if (fifo_fd < 0) {
-        throw std::runtime_error("Couldn't open FIFO fd");
-    }
+void ServerImpl::set_fifo(std::string read, std::string write) {
+    throw;
+    /*
+// tedious checking that everything is okay
+if (mkfifo(path.c_str(), 0660) && errno != EEXIST) {
+    throw std::runtime_error("FIFO doesn't exist and I couldn't create one");
+}
+fifo_fd = open(path.c_str(), O_NONBLOCK | O_RDWR);
+if (fifo_fd < 0) {
+    throw std::runtime_error("Couldn't open FIFO fd");
+}
 
-    // but is it a FIFO?
-    struct stat fifo_stat;
-    if (fstat(fifo_fd, &fifo_stat)) {
-        close(fifo_fd);
-        fifo_fd = -1;
-        throw std::runtime_error("Couldn't perform stat() on an opened FIFO! WTF?!");
-    }
+// but is it a FIFO?
+struct stat fifo_stat;
+if (fstat(fifo_fd, &fifo_stat)) {
+    close(fifo_fd);
+    fifo_fd = -1;
+    throw std::runtime_error("Couldn't perform stat() on an opened FIFO! WTF?!");
+}
 
-    if (!S_ISFIFO(fifo_stat.st_mode)) {
-        close(fifo_fd);
-        fifo_fd = -1;
-        throw std::runtime_error("File is not a FIFO");
-    }
+if (!S_ISFIFO(fifo_stat.st_mode)) {
+    close(fifo_fd);
+    fifo_fd = -1;
+    throw std::runtime_error("File is not a FIFO");
+}
 
-    // finally!
-    fifo_path = path;
+// finally!
+fifo_path = path;
+    */
 }
 
 } // namespace Blocking

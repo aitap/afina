@@ -31,7 +31,7 @@ public:
     void Join() override;
 
     // enables listening on a FIFO in addition to network
-    void set_fifo(std::string path);
+    void set_fifo(std::string read, std::string write);
 
 protected:
     /**
@@ -52,10 +52,10 @@ private:
     uint16_t listen_port;
 
     // path to the FIFO to listen on
-    std::string fifo_path;
+    std::string fifo_read_path, fifo_write_path;
 
     // FIFO fd to listen on, -1 if none needed
-    int fifo_fd;
+    int fifo_read_fd, fifo_write_fd;
 
     // mutex for a single thread to access the fifo fd
     std::mutex fifo_lock;
