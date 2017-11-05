@@ -119,11 +119,15 @@ struct ep_fd {
     virtual ~ep_fd() {}
 };
 
-static int epoll_modify(int epoll_fd, int how, uint32_t events, ep_fd &target) {
+static int epoll_modify(int epoll_fd, int how, uint32_t events, ep_fd &target, int target_fd) {
     struct epoll_event new_ev {
         events, { (void *)&target }
     };
-    return epoll_ctl(epoll_fd, how, target.fd, &new_ev);
+    return epoll_ctl(epoll_fd, how, target_fd, &new_ev);
+}
+
+static int epoll_modify(int epoll_fd, int how, uint32_t events, ep_fd &target) {
+	return epoll_modify(epoll_fd, how, events, target, target.fd);
 }
 
 struct client_fd : ep_fd {
@@ -138,19 +142,21 @@ struct client_fd : ep_fd {
     client_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_)
         : ep_fd(fd_, epoll_fd_, ps_), offset(0), bailout(false) {}
 
-    bool read_in() {
+    bool read_in(int read_fd) {
         // try to exhaust whatever the client has sent us
         ssize_t len = 0;
         do {
             offset += len;
             if (buf.size() == offset)
                 buf.resize(std::max(buf.size() * 2, buffer_size));
-            len = read(fd, buf.data() + offset, buf.size() - offset);
+            len = read(read_fd, buf.data() + offset, buf.size() - offset);
         } while (len > 0);
         if (!len)
             bailout = true;
         return (len >= 0 || errno == EWOULDBLOCK || errno == EAGAIN);
     }
+
+	bool read_in() { return read_in(fd); }
 
     void parse_run() {
         try {
@@ -192,15 +198,17 @@ struct client_fd : ep_fd {
         }
     }
 
-    bool write_out() {
+    bool write_out(int write_fd) {
         ssize_t len = 0;
         do {
-            len = write(fd, out.data(), out.size());
+            len = write(write_fd, out.data(), out.size());
             if (len > 0)
                 out.erase(0, len);
         } while (out.size() && len > 0);
         return (!out.size() || errno == EWOULDBLOCK || errno == EAGAIN);
     }
+
+	bool write_out() { return write_out(fd); }
 };
 
 struct client_socket : client_fd {
@@ -246,41 +254,43 @@ struct client_socket : client_fd {
 
 struct client_fifo : client_fd {
     std::string fifo_path;
-    client_fifo(int epoll_, std::shared_ptr<Afina::Storage> ps_) : client_fd(-1, epoll_, ps_) {}
+	int read_fd, write_fd;
+    client_fifo(int epoll_, std::shared_ptr<Afina::Storage> ps_) : client_fd(-1, epoll_, ps_), read_fd(-1), write_fd(-1) {}
 
     void die(const char *what) {
-        close(fd);
+		close(read_fd);
+		close(write_fd);
         throw std::runtime_error(what);
     }
 
     void enable(int read_fd_, int write_fd_) {
-        throw; // TODO
+		read_fd = read_fd_;
+		write_fd = write_fd_;
+		if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, *this, read_fd)) {
+			die("Couldn't watch read FIFO for events");
+		}
+		if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLOUT | EPOLLET, *this, write_fd)) {
+			die("Couldn't watch write FIFO for events");
+		}
     }
 
     void cleanup() { // this client is busted, but we can try again
-        out.clear();
+		buf.clear();
+		buf.resize(buffer_size);
         offset = 0;
+        out.clear();
         bailout = false;
         parser.Reset();
-        /*
-if (close(read_fd))
-    throw std::runtime_error("Failed to close FIFO fd");
-fd = open(fifo_path.c_str(), O_NONBLOCK | O_RDWR);
-if (fd == -1)
-    throw std::runtime_error("Couldn't reopen FIFO fd");
-if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, *this)) {
-    die("Failed to readd new FIFO fd to the epoll set");
-}
-        */
+		// do I *have* to reopen all fds? maybe not
     }
 
     void advance(uint32_t events) override {
-        std::cerr << "events=" << events << std::endl;
         if (events & EPOLLERR) {
-            die("Caught error state on FIFO fd");
+            die("Caught error state on a FIFO fd");
         }
+
         if (events & EPOLLIN) {
-            if (!read_in()) {
+            if (!read_in(read_fd)) {
                 return cleanup();
             }
         }
@@ -289,14 +299,10 @@ if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, *this)) {
 
         if (events & EPOLLOUT) {
             if (out.size()) {
-                if (!write_out()) {
+                if (!write_out(write_fd)) {
                     return cleanup();
                 }
             }
-        }
-
-        if (bailout) {
-            return cleanup();
         }
     }
 };
@@ -425,12 +431,12 @@ void ServerImpl::RunEpoll() {
     close(epoll_sock);
 }
 
-static int open_fifo(const std::string &path) {
+static int open_fifo(const std::string &path, int flags) {
     // tedious checking that everything is okay
     if (mkfifo(path.c_str(), 0660) && errno != EEXIST) {
         throw std::runtime_error("FIFO doesn't exist and I couldn't create one");
     }
-    int fd = open(path.c_str(), O_NONBLOCK | O_RDWR);
+    int fd = open(path.c_str(), O_NONBLOCK | flags);
     if (fd < 0) {
         throw std::runtime_error("Couldn't open FIFO fd");
     }
@@ -452,8 +458,8 @@ static int open_fifo(const std::string &path) {
 
 void ServerImpl::set_fifo(const std::string &read, const std::string &write) {
     try {
-        fifo_read_fd = open_fifo(read);
-        fifo_write_fd = open_fifo(write);
+        fifo_read_fd = open_fifo(read, O_RDONLY);
+        fifo_write_fd = open_fifo(write, O_RDWR);
         fifo_read_path = read;
         fifo_write_path = write;
     } catch (...) {

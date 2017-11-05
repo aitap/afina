@@ -241,7 +241,7 @@ int main(int argc, char **argv) {
         if (options.count("readfifo") ^ options.count("writefifo")) {
             throw std::runtime_error("FIFO requires exactly 2 files (or none at all)");
         }
-        if (options.count("fifo")) {
+        if (options.count("readfifo")) {
             Afina::Network::Epoll::ServerImpl *s = dynamic_cast<Afina::Network::Epoll::ServerImpl *>(app.server.get());
             if (!s) {
                 throw std::runtime_error("FIFO is only supported in epoll backend");
