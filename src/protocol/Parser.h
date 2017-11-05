@@ -66,6 +66,7 @@ private:
 
     // Current parser state
     State state;
+    bool parse_complete;
 
     // vrious fields of the command
     std::string name;
