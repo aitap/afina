@@ -127,7 +127,7 @@ static int epoll_modify(int epoll_fd, int how, uint32_t events, ep_fd &target, i
 }
 
 static int epoll_modify(int epoll_fd, int how, uint32_t events, ep_fd &target) {
-	return epoll_modify(epoll_fd, how, events, target, target.fd);
+    return epoll_modify(epoll_fd, how, events, target, target.fd);
 }
 
 struct client_fd : ep_fd {
@@ -156,7 +156,7 @@ struct client_fd : ep_fd {
         return (len >= 0 || errno == EWOULDBLOCK || errno == EAGAIN);
     }
 
-	bool read_in() { return read_in(fd); }
+    bool read_in() { return read_in(fd); }
 
     void parse_run() {
         try {
@@ -208,7 +208,7 @@ struct client_fd : ep_fd {
         return (!out.size() || errno == EWOULDBLOCK || errno == EAGAIN);
     }
 
-	bool write_out() { return write_out(fd); }
+    bool write_out() { return write_out(fd); }
 };
 
 struct client_socket : client_fd {
@@ -252,36 +252,79 @@ struct client_socket : client_fd {
     }
 };
 
+static int open_fifo(const std::string &path, int flags) {
+    // tedious checking that everything is okay
+    if (mkfifo(path.c_str(), 0660) && errno != EEXIST) {
+        throw std::runtime_error("FIFO doesn't exist and I couldn't create one");
+    }
+    int fd = open(path.c_str(), O_NONBLOCK | flags);
+    if (fd < 0) {
+        throw std::runtime_error("Couldn't open FIFO fd");
+    }
+
+    // but is it a FIFO?
+    struct stat fifo_stat;
+    if (fstat(fd, &fifo_stat)) {
+        close(fd);
+        throw std::runtime_error("Couldn't perform stat() on an opened FIFO! WTF?!");
+    }
+
+    if (!S_ISFIFO(fifo_stat.st_mode)) {
+        close(fd);
+        throw std::runtime_error("File is not a FIFO");
+    }
+
+    return fd;
+}
+
 struct client_fifo : client_fd {
     std::string fifo_path;
-	int read_fd, write_fd;
-    client_fifo(int epoll_, std::shared_ptr<Afina::Storage> ps_) : client_fd(-1, epoll_, ps_), read_fd(-1), write_fd(-1) {}
+    int read_fd, write_fd;
+    std::string read_path, write_path;
+    client_fifo(int epoll_, std::shared_ptr<Afina::Storage> ps_)
+        : client_fd(-1, epoll_, ps_), read_fd(-1), write_fd(-1) {}
 
     void die(const char *what) {
-		close(read_fd);
-		close(write_fd);
+        close(read_fd);
+        close(write_fd);
         throw std::runtime_error(what);
     }
 
     void enable(int read_fd_, int write_fd_) {
-		read_fd = read_fd_;
-		write_fd = write_fd_;
-		if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, *this, read_fd)) {
-			die("Couldn't watch read FIFO for events");
-		}
-		if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLOUT | EPOLLET, *this, write_fd)) {
-			die("Couldn't watch write FIFO for events");
-		}
+        read_fd = read_fd_;
+        write_fd = write_fd_;
+        if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, *this, read_fd)) {
+            die("Couldn't watch read FIFO for events");
+        }
+        if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLOUT | EPOLLET, *this, write_fd)) {
+            die("Couldn't watch write FIFO for events");
+        }
     }
 
     void cleanup() { // this client is busted, but we can try again
-		buf.clear();
-		buf.resize(buffer_size);
+        buf.clear();
+        buf.resize(buffer_size);
         offset = 0;
         out.clear();
         bailout = false;
         parser.Reset();
-		// do I *have* to reopen all fds? maybe not
+        std::cout << "trying to reopen write FIFO" << std::endl;
+        if (close(write_fd)) {
+            throw std::runtime_error("Couldn't close FIFO");
+        }
+        write_fd = -1;
+        try {
+            write_fd = open_fifo(write_path, O_RDWR);
+            if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLOUT | EPOLLET, *this, write_fd)) {
+                die("Couldn't watch write FIFO for events");
+            }
+        } catch (...) {
+            // don't leak fds
+            close(read_fd);
+            close(write_fd);
+            read_fd = write_fd = -1;
+            throw;
+        }
     }
 
     void advance(uint32_t events) override {
@@ -297,12 +340,14 @@ struct client_fifo : client_fd {
 
         parse_run();
 
-        if (events & EPOLLOUT) {
-            if (out.size()) {
-                if (!write_out(write_fd)) {
-                    return cleanup();
-                }
+        if (out.size()) {
+            if (!write_out(write_fd)) {
+                return cleanup();
             }
+        }
+
+        if (bailout) { // client closed read fd; we should reopen ours, too
+            return cleanup();
         }
     }
 };
@@ -399,6 +444,8 @@ void ServerImpl::RunEpoll() {
         // it's set_fifo's job to make sure that either 2 FIFOs are open or none at all
         if (fifo_read_fd >= 0 && fifo_write_fd >= 0) {
             fifo_handler.enable(fifo_read_fd, fifo_write_fd);
+            fifo_handler.read_path = fifo_read_path;
+            fifo_handler.write_path = fifo_write_path;
             fifo_write_fd = fifo_read_fd = -1;
         }
     }
@@ -425,35 +472,10 @@ void ServerImpl::RunEpoll() {
         shutdown(cl.fd, SHUT_RDWR);
         close(cl.fd);
     }
-    if (fifo_handler.fd != -1) {
-        close(fifo_handler.fd);
-    }
+    // at this point it probably doesn't matter if some of them were -1
+    close(fifo_handler.read_fd);
+    close(fifo_handler.write_fd);
     close(epoll_sock);
-}
-
-static int open_fifo(const std::string &path, int flags) {
-    // tedious checking that everything is okay
-    if (mkfifo(path.c_str(), 0660) && errno != EEXIST) {
-        throw std::runtime_error("FIFO doesn't exist and I couldn't create one");
-    }
-    int fd = open(path.c_str(), O_NONBLOCK | flags);
-    if (fd < 0) {
-        throw std::runtime_error("Couldn't open FIFO fd");
-    }
-
-    // but is it a FIFO?
-    struct stat fifo_stat;
-    if (fstat(fd, &fifo_stat)) {
-        close(fd);
-        throw std::runtime_error("Couldn't perform stat() on an opened FIFO! WTF?!");
-    }
-
-    if (!S_ISFIFO(fifo_stat.st_mode)) {
-        close(fd);
-        throw std::runtime_error("File is not a FIFO");
-    }
-
-    return fd;
 }
 
 void ServerImpl::set_fifo(const std::string &read, const std::string &write) {
