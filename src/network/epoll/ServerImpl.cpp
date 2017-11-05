@@ -425,35 +425,47 @@ void ServerImpl::RunEpoll() {
     close(epoll_sock);
 }
 
-void ServerImpl::set_fifo(std::string read, std::string write) {
-    throw;
-    /*
-// tedious checking that everything is okay
-if (mkfifo(path.c_str(), 0660) && errno != EEXIST) {
-    throw std::runtime_error("FIFO doesn't exist and I couldn't create one");
-}
-fifo_fd = open(path.c_str(), O_NONBLOCK | O_RDWR);
-if (fifo_fd < 0) {
-    throw std::runtime_error("Couldn't open FIFO fd");
+static int open_fifo(const std::string &path) {
+    // tedious checking that everything is okay
+    if (mkfifo(path.c_str(), 0660) && errno != EEXIST) {
+        throw std::runtime_error("FIFO doesn't exist and I couldn't create one");
+    }
+    int fd = open(path.c_str(), O_NONBLOCK | O_RDWR);
+    if (fd < 0) {
+        throw std::runtime_error("Couldn't open FIFO fd");
+    }
+
+    // but is it a FIFO?
+    struct stat fifo_stat;
+    if (fstat(fd, &fifo_stat)) {
+        close(fd);
+        throw std::runtime_error("Couldn't perform stat() on an opened FIFO! WTF?!");
+    }
+
+    if (!S_ISFIFO(fifo_stat.st_mode)) {
+        close(fd);
+        throw std::runtime_error("File is not a FIFO");
+    }
+
+    return fd;
 }
 
-// but is it a FIFO?
-struct stat fifo_stat;
-if (fstat(fifo_fd, &fifo_stat)) {
-    close(fifo_fd);
-    fifo_fd = -1;
-    throw std::runtime_error("Couldn't perform stat() on an opened FIFO! WTF?!");
-}
-
-if (!S_ISFIFO(fifo_stat.st_mode)) {
-    close(fifo_fd);
-    fifo_fd = -1;
-    throw std::runtime_error("File is not a FIFO");
-}
-
-// finally!
-fifo_path = path;
-    */
+void ServerImpl::set_fifo(const std::string &read, const std::string &write) {
+    try {
+        fifo_read_fd = open_fifo(read);
+        fifo_write_fd = open_fifo(write);
+        fifo_read_path = read;
+        fifo_write_path = write;
+    } catch (...) {
+        // make sure no dangling file descriptors are left
+        for (int *fd : {&fifo_read_fd, &fifo_write_fd}) {
+            if (*fd != -1) {
+                close(*fd);
+                *fd = -1;
+            }
+        }
+        throw;
+    }
 }
 
 } // namespace Blocking

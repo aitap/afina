@@ -31,7 +31,7 @@ public:
     void Join() override;
 
     // enables listening on a FIFO in addition to network
-    void set_fifo(std::string read, std::string write);
+    void set_fifo(const std::string &read, const std::string &write);
 
 protected:
     /**
