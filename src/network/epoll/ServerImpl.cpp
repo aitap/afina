@@ -124,20 +124,89 @@ static int epoll_modify(int epoll_fd, int how, uint32_t events, ep_fd &target) {
     return epoll_ctl(epoll_fd, how, target.fd, &new_ev);
 }
 
-// test with small buffer first
-static const size_t buffer_size = 16;
-
 struct client_fd : ep_fd {
+    // test with small buffer first
+    const size_t buffer_size = 16;
+
     std::vector<char> buf;
     size_t offset;
     std::string out;
-    std::list<client_fd> &list;
-    std::list<client_fd>::iterator self;
     bool bailout;
     Protocol::Parser parser;
-    client_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_fd> &list_,
-              std::list<client_fd>::iterator self_)
-        : ep_fd(fd_, epoll_fd_, ps_), offset(0), list(list_), self(self_), bailout(false) {
+    client_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_)
+        : ep_fd(fd_, epoll_fd_, ps_), offset(0), bailout(false) {}
+
+    bool read_in() {
+        // try to exhaust whatever the client has sent us
+        ssize_t len = 0;
+        do {
+            offset += len;
+            if (buf.size() == offset)
+                buf.resize(std::max(buf.size() * 2, buffer_size));
+            len = read(fd, buf.data() + offset, buf.size() - offset);
+        } while (len > 0);
+        if (!len)
+            bailout = true;
+        return (len >= 0 || errno == EWOULDBLOCK || errno == EAGAIN);
+    }
+
+    void parse_run() {
+        try {
+            for (;;) { // loop until we can't create more commands
+                uint32_t body_size;
+                // check if there's a pending command in the parser
+                auto cmd = parser.Build(body_size);
+                if (!cmd) { // maybe we can parse more and get it?
+                    size_t parsed = 0;
+                    parser.Parse(buf.data(), offset, parsed);
+                    buf.erase(buf.begin(), buf.begin() + parsed);
+                    offset -= parsed;
+                    cmd = parser.Build(body_size);
+                }
+                if (cmd && (!body_size || offset >= body_size + 2)) {
+                    // got a command and a body if required, will execute now
+                    std::string body;
+                    parser.Reset();
+                    if (body_size) {
+                        // supply the body
+                        body.assign(buf.data(), body_size);
+                        buf.erase(buf.begin(), buf.begin() + body_size + 2);
+                        offset -= (body_size + 2);
+                    }
+                    std::string local_out;
+                    cmd->Execute(*ps, body, local_out);
+                    out += local_out;
+                    out += std::string("\r\n");
+                } else {
+                    // we did our best, but we can't execute a command yet
+                    // no chance of other commands until more data comes
+                    break;
+                }
+            }
+        } catch (std::runtime_error &e) {
+            // if anything fails we just report the error to the user
+            out += std::string("CLIENT_ERROR ") + e.what() + std::string("\r\n");
+            bailout = true;
+        }
+    }
+
+    bool write_out() {
+        ssize_t len = 0;
+        do {
+            len = write(fd, out.data(), out.size());
+            if (len > 0)
+                out.erase(0, len);
+        } while (out.size() && len > 0);
+        return (!out.size() || errno == EWOULDBLOCK || errno == EAGAIN);
+    }
+};
+
+struct client_socket : client_fd {
+    std::list<client_socket> &list;
+    std::list<client_socket>::iterator self;
+    client_socket(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_socket> &list_,
+                  std::list<client_socket>::iterator self_)
+        : client_fd(fd_, epoll_fd_, ps_), list(list_), self(self_) {
         buf.resize(buffer_size);
     }
     void cleanup() {
@@ -152,80 +221,89 @@ struct client_fd : ep_fd {
         if (events & (EPOLLHUP | EPOLLERR))
             return cleanup();
 
-        ssize_t len = 0; // return value of send() & recv()
-
-        // try to exhaust whatever the client has sent us
-        do {
-            offset += len;
-            if (buf.size() == offset)
-                buf.resize(std::max(buf.size() * 2, buffer_size));
-            len = recv(fd, buf.data() + offset, buf.size() - offset, 0);
-        } while (len > 0);
-        if (errno != EWOULDBLOCK && errno != EAGAIN)
+        if (!read_in()) {
             return cleanup();
-        if (!len)
-            bailout = true;
-
-        // if we don't have any pending output, we can try parse new commands
-        if (!out.size()) {
-            try {
-                for (;;) { // loop until we can't create more commands
-                    uint32_t body_size;
-                    // check if there's a pending command in the parser
-                    auto cmd = parser.Build(body_size);
-                    if (!cmd) { // maybe we can parse more and get it?
-                        size_t parsed = 0;
-                        parser.Parse(buf.data(), offset, parsed);
-                        buf.erase(buf.begin(), buf.begin() + parsed);
-                        offset -= parsed;
-                        cmd = parser.Build(body_size);
-                    }
-                    if (cmd && (!body_size || offset >= body_size + 2)) {
-                        // got a command and a body if required, will execute now
-                        std::string body;
-                        parser.Reset();
-                        if (body_size) {
-                            // supply the body
-                            body.assign(buf.data(), body_size);
-                            buf.erase(buf.begin(), buf.begin() + body_size + 2);
-                            offset -= (body_size + 2);
-                        }
-                        std::string local_out;
-                        cmd->Execute(*ps, body, local_out);
-                        out += local_out;
-                        out += std::string("\r\n");
-                    } else {
-                        // we did our best, but we can't execute a command yet
-                        // no chance of other commands until more data comes
-                        break;
-                    }
-                }
-            } catch (std::runtime_error &e) {
-                // if anything fails we just report the error to the user
-                out += std::string("CLIENT_ERROR ") + e.what() + std::string("\r\n");
-                bailout = true;
-            }
         }
+
+        // try to parse new commands
+        // XXX: why did I forbid parsing while having pending output?
+        parse_run();
 
         // we have created pending output just now or have it from previous iteration
         if (out.size()) {
-            do {
-                len = send(fd, out.data(), out.size(), 0);
-                if (len > 0)
-                    out.erase(0, len);
-            } while (out.size() && len > 0);
-            if (errno != EWOULDBLOCK && errno != EAGAIN)
+            if (!write_out()) {
                 return cleanup();
+            }
         }
 
-        if (bailout)
+        if (bailout) {
             return cleanup();
+        }
+    }
+};
+
+struct client_fifo : client_fd {
+    std::string fifo_path;
+    client_fifo(int pipe_, int epoll_, std::shared_ptr<Afina::Storage> ps_) : client_fd(pipe_, epoll_, ps_) {}
+
+    void die(const char *what) {
+        close(fd);
+        throw std::runtime_error(what);
+    }
+
+    void switch_mode(uint32_t events) {
+        std::cerr << "epoll mode -> events=" << events << std::endl;
+        if (epoll_modify(epoll_fd, EPOLL_CTL_MOD, events | EPOLLET, *this)) {
+            die("Failed to switch the epoll event set of the FIFO fd");
+        }
+    }
+
+    void cleanup() { // this client is busted, but we can try again
+        std::cerr << errno << "<-errno; cleaning up FIFO" << std::endl;
+        out.clear();
+        offset = 0;
+        bailout = false;
+        parser.Reset();
+        if (close(fd))
+            throw std::runtime_error("Failed to close FIFO fd");
+        fd = open(fifo_path.c_str(), O_NONBLOCK | O_RDWR);
+        if (fd == -1)
+            throw std::runtime_error("Couldn't reopen FIFO fd");
+        if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, *this)) {
+            die("Failed to readd new FIFO fd to the epoll set");
+        }
+    }
+
+    void advance(uint32_t events) override {
+        std::cerr << "events=" << events << std::endl;
+        if (events & EPOLLERR) {
+            die("Caught error state on FIFO fd");
+        }
+        if (events & EPOLLIN) {
+            if (!read_in()) {
+                return cleanup();
+            }
+        }
+
+        parse_run();
+
+        if (events & EPOLLOUT) {
+            if (out.size()) {
+                if (!write_out()) {
+                    return cleanup();
+                }
+            }
+        }
+
+        if (bailout) {
+            return cleanup();
+        }
     }
 };
 
 struct listen_fd : ep_fd {
-    std::list<client_fd> &client_list;
-    listen_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_fd> &client_list_)
+    std::list<client_socket> &client_list;
+    listen_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_socket> &client_list_)
         : ep_fd(fd_, epoll_fd_, ps_), client_list(client_list_) {}
     void advance(uint32_t events) override {
         if (events & (EPOLLHUP | EPOLLERR)) {
@@ -253,28 +331,6 @@ struct listen_fd : ep_fd {
         // oh well
         close(fd);
         throw std::runtime_error("Socket accept() failed");
-    }
-};
-
-struct pipe_fd : ep_fd {
-    std::vector<char> buf;
-    size_t offset;
-    std::string out;
-    bool bailout;
-    Protocol::Parser parser;
-    pipe_fd(int pipe_, int epoll_, std::shared_ptr<Afina::Storage> ps_) : ep_fd(pipe_, epoll_, ps_) {}
-    void reopen(mode_t mode);
-    void advance(uint32_t events) override {
-        if (events & (EPOLLHUP | EPOLLERR)) {
-            close(fd);
-            throw std::runtime_error("Caught error state on listen socket");
-        }
-        if (events & EPOLLIN) {
-            // TODO: read until EOF, then execute commands and reopen to write
-        } else if (events & EPOLLOUT) {
-            // TODO: write all output, then reopen to read
-        }
-        throw; // TODO
     }
 };
 
@@ -324,19 +380,20 @@ void ServerImpl::RunEpoll() {
         throw std::runtime_error("Couldn't set O_NONBLOCK to server socket");
 
     // prepare the necessary objects to handle clients
-    std::list<client_fd> client_list;
+    std::list<client_socket> client_list;
     listen_fd listening_object{server_socket, epoll_sock, pStorage, client_list};
     // add the listen socket to the epoll set
     if (epoll_modify(epoll_sock, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, listening_object))
         throw std::runtime_error("epoll_ctl failed to add the listen socket");
 
-    pipe_fd fifo_handler{-1, epoll_sock, pStorage};
+    client_fifo fifo_handler{-1, epoll_sock, pStorage};
     {
         // maybe there's a FIFO waiting for us?
         std::lock_guard<std::mutex> lock{fifo_lock};
         if (fifo_fd >= 0) { // and we're the one to handle it?
             fifo_handler.fd = fifo_fd;
-            if (epoll_modify(epoll_sock, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, fifo_handler))
+            fifo_handler.fifo_path = fifo_path;
+            if (epoll_modify(epoll_sock, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT | EPOLLET, fifo_handler))
                 throw std::runtime_error("epoll_ctl failed to add the fifo fd");
             // my preciousssss
             fifo_fd = -1;
@@ -360,10 +417,13 @@ void ServerImpl::RunEpoll() {
     // clean up all sockets involved
     shutdown(server_socket, SHUT_RDWR);
     close(server_socket);
-    for (client_fd &cl : client_list) {
+    for (client_socket &cl : client_list) {
         // don't call .cleanup() because it invalidates cl
         shutdown(cl.fd, SHUT_RDWR);
         close(cl.fd);
+    }
+    if (fifo_handler.fd != -1) {
+        close(fifo_handler.fd);
     }
     close(epoll_sock);
 }
@@ -373,7 +433,7 @@ void ServerImpl::set_fifo(std::string path) {
     if (mkfifo(path.c_str(), 0660) && errno != EEXIST) {
         throw std::runtime_error("FIFO doesn't exist and I couldn't create one");
     }
-    fifo_fd = open(path.c_str(), O_NONBLOCK, O_RDONLY);
+    fifo_fd = open(path.c_str(), O_NONBLOCK | O_RDWR);
     if (fifo_fd < 0) {
         throw std::runtime_error("Couldn't open FIFO fd");
     }
