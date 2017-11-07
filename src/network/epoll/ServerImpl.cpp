@@ -184,8 +184,15 @@ struct client_fd : ep_fd {
                 }
             }
         } catch (std::runtime_error &e) {
-            // if anything fails we just report the error to the user
+            // report the error to the user
             out += std::string("CLIENT_ERROR ") + e.what() + std::string("\r\n");
+            // parser needs to be reset, otherwise it remembers the nonsense
+            parser.Reset();
+            // clean the input buffer from the nonsense, too
+            buf.clear();
+            buf.resize(buffer_size);
+            offset = 0;
+            // prepare to eject the pilot
             bailout = true;
         }
     }
@@ -211,10 +218,10 @@ struct client_socket : client_fd {
         buf.resize(buffer_size);
     }
     void cleanup() {
-        epoll_modify(epoll_fd, EPOLL_CTL_DEL, 0, *this, fd);
+        // destructor will close() the fd, which will cause it to be deleted from epoll set
         // time to commit sudoku
         list.erase(self);
-        // ISO C++ faq does allow even `delete this`, subject to it being done carefully
+        // (ISO C++ faq does allow even `delete this`, subject to it being done carefully)
     }
     void advance(uint32_t events) override {
         if (events & (EPOLLHUP | EPOLLERR))
@@ -287,24 +294,34 @@ struct client_fifo : client_fd {
         }
     }
 
-    void cleanup() { // this client is busted, but we can try again
+    void reopen() {
+        // something bad happened, let's clean buffers to prevent parse errors and trailing output
         buf.clear();
         buf.resize(buffer_size);
         offset = 0;
         out.clear();
-        bailout = false;
-        parser.Reset();
-        std::cout << "trying to reopen write FIFO" << std::endl;
+
+        // and reopen FIFOs for the hell of it
+        std::cout << "trying to reopen FIFOs" << std::endl;
         if (close(write_fd)) {
             write_fd = -1; // retrying close() isn't a good idea
-            throw std::runtime_error("Couldn't close FIFO");
+            throw std::runtime_error("Couldn't close write FIFO");
         }
-        write_fd = open_fifo(write_path, O_RDWR);
-        if (write_fd == -1)
-            throw std::runtime_error("Couldn't reopen write FIFO");
+        write_fd = open_fifo(write_path, O_RDWR); // throws if anything is wrong
         if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLOUT | EPOLLET, *this, write_fd)) {
-            throw std::runtime_error("Couldn't watch write FIFO for events");
+            throw std::runtime_error("Couldn't readd write FIFO to epoll set");
         }
+        if (close(read_fd)) {
+            read_fd = -1; // retrying close() isn't a good idea
+            throw std::runtime_error("Couldn't close read FIFO");
+        }
+        read_fd = open_fifo(read_path, O_RDONLY); // throws if anything is wrong
+        if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLOUT | EPOLLET, *this, read_fd)) {
+            throw std::runtime_error("Couldn't readd read FIFO to epoll set");
+        }
+
+        // ready for next iteration
+        bailout = false;
     }
 
     void advance(uint32_t events) override {
@@ -314,7 +331,8 @@ struct client_fifo : client_fd {
 
         if (events & EPOLLIN) {
             if (!read_in(read_fd)) {
-                return cleanup();
+                // read failed irrecoverably (not just EWOULDBLOCK)
+                return reopen();
             }
         }
 
@@ -322,13 +340,15 @@ struct client_fifo : client_fd {
 
         if (out.size()) {
             if (!write_out(write_fd)) {
-                return cleanup();
+                // write failed irrecoverably
+                return reopen();
             }
         }
 
-        if (bailout) { // client closed read fd; we should reopen ours, too
-            return cleanup();
-        }
+        // NOTE: reopening writefd right after writing will lose information if client hadn't opened the FIFO for
+        // reading
+
+        // if (bailout) { ... }
     }
 
     ~client_fifo() {
@@ -344,7 +364,6 @@ struct listen_fd : ep_fd {
         : ep_fd(epoll_fd_, ps_), fd(fd_), client_list(client_list_) {}
     void advance(uint32_t events) override {
         if (events & (EPOLLHUP | EPOLLERR)) {
-            close(fd);
             throw std::runtime_error("Caught error state on listen socket");
         }
         // prepare to accept a connection
@@ -366,7 +385,6 @@ struct listen_fd : ep_fd {
         if (errno == EAGAIN || errno == EWOULDBLOCK)
             return; // don't crash if we're just waiting for more clients
         // oh well
-        close(fd);
         throw std::runtime_error("Socket accept() failed");
     }
     ~listen_fd() {
