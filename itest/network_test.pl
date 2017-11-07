@@ -2,7 +2,7 @@
 use 5.016;
 use warnings;
 use threads;
-use Test::More tests => 80;
+use Test::More tests => 85;
 use IO::Socket::INET;
 use Getopt::Long;
 
@@ -55,7 +55,11 @@ sub afina_request { # 5 tests
 		ok(close($wf), "Closed writing end of connection");
 	}
 	my $received;
-	$received .= $_ while (<$rf>);
+	if ($rf->isa("IO::Socket::INET")) {
+		$received .= $_ while (<$rf>); # networked Afina must properly close socket when client is done
+	} else {
+		sysread($rf, $received, 65536); # do a single read, don't expect Afina to close fd
+	}
 	$silent or note $received =~ s/^/<- /mrg;
 	$received;
 }
@@ -169,4 +173,10 @@ afina_test(
 	},
 	"STORED\r\n",
 	"Must correctly handle partial writes"
+);
+
+afina_test(
+	"get foo\r\n",
+	"VALUE foo 0 3\r\nwtf\r\nEND\r\n",
+	"Correct result of partially written command"
 );
