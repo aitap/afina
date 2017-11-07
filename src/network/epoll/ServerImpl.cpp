@@ -111,10 +111,9 @@ static int setsocknonblocking(int sock) {
 }
 
 struct ep_fd {
-    int fd;
     int epoll_fd;
     std::shared_ptr<Afina::Storage> ps;
-    ep_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_) : fd(fd_), epoll_fd(epoll_fd_), ps(ps_) {}
+    ep_fd(int epoll_fd_, std::shared_ptr<Afina::Storage> ps_) : epoll_fd(epoll_fd_), ps(ps_) {}
     virtual void advance(uint32_t) = 0;
     virtual ~ep_fd() {}
 };
@@ -126,10 +125,6 @@ static int epoll_modify(int epoll_fd, int how, uint32_t events, ep_fd &target, i
     return epoll_ctl(epoll_fd, how, target_fd, &new_ev);
 }
 
-static int epoll_modify(int epoll_fd, int how, uint32_t events, ep_fd &target) {
-    return epoll_modify(epoll_fd, how, events, target, target.fd);
-}
-
 struct client_fd : ep_fd {
     // test with small buffer first
     const size_t buffer_size = 16;
@@ -139,8 +134,7 @@ struct client_fd : ep_fd {
     std::string out;
     bool bailout;
     Protocol::Parser parser;
-    client_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_)
-        : ep_fd(fd_, epoll_fd_, ps_), offset(0), bailout(false) {}
+    client_fd(int epoll_fd_, std::shared_ptr<Afina::Storage> ps_) : ep_fd(epoll_fd_, ps_), offset(0), bailout(false) {}
 
     bool read_in(int read_fd) {
         // try to exhaust whatever the client has sent us
@@ -155,8 +149,6 @@ struct client_fd : ep_fd {
             bailout = true;
         return (len >= 0 || errno == EWOULDBLOCK || errno == EAGAIN);
     }
-
-    bool read_in() { return read_in(fd); }
 
     void parse_run() {
         try {
@@ -207,22 +199,19 @@ struct client_fd : ep_fd {
         } while (out.size() && len > 0);
         return (!out.size() || errno == EWOULDBLOCK || errno == EAGAIN);
     }
-
-    bool write_out() { return write_out(fd); }
 };
 
 struct client_socket : client_fd {
+    int fd;
     std::list<client_socket> &list;
     std::list<client_socket>::iterator self;
     client_socket(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_socket> &list_,
                   std::list<client_socket>::iterator self_)
-        : client_fd(fd_, epoll_fd_, ps_), list(list_), self(self_) {
+        : client_fd(epoll_fd_, ps_), fd(fd_), list(list_), self(self_) {
         buf.resize(buffer_size);
     }
     void cleanup() {
-        epoll_modify(epoll_fd, EPOLL_CTL_DEL, 0, *this);
-        shutdown(fd, SHUT_RDWR);
-        close(fd);
+        epoll_modify(epoll_fd, EPOLL_CTL_DEL, 0, *this, fd);
         // time to commit sudoku
         list.erase(self);
         // ISO C++ faq does allow even `delete this`, subject to it being done carefully
@@ -231,7 +220,7 @@ struct client_socket : client_fd {
         if (events & (EPOLLHUP | EPOLLERR))
             return cleanup();
 
-        if (!read_in()) {
+        if (!read_in(fd)) {
             return cleanup();
         }
 
@@ -241,7 +230,7 @@ struct client_socket : client_fd {
 
         // we have created pending output just now or have it from previous iteration
         if (out.size()) {
-            if (!write_out()) {
+            if (!write_out(fd)) {
                 return cleanup();
             }
         }
@@ -249,6 +238,10 @@ struct client_socket : client_fd {
         if (bailout) {
             return cleanup();
         }
+    }
+    ~client_socket() {
+        shutdown(fd, SHUT_RDWR);
+        close(fd);
     }
 };
 
@@ -281,23 +274,16 @@ struct client_fifo : client_fd {
     std::string fifo_path;
     int read_fd, write_fd;
     std::string read_path, write_path;
-    client_fifo(int epoll_, std::shared_ptr<Afina::Storage> ps_)
-        : client_fd(-1, epoll_, ps_), read_fd(-1), write_fd(-1) {}
-
-    void die(const char *what) {
-        close(read_fd);
-        close(write_fd);
-        throw std::runtime_error(what);
-    }
+    client_fifo(int epoll_, std::shared_ptr<Afina::Storage> ps_) : client_fd(epoll_, ps_), read_fd(-1), write_fd(-1) {}
 
     void enable(int read_fd_, int write_fd_) {
         read_fd = read_fd_;
         write_fd = write_fd_;
         if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, *this, read_fd)) {
-            die("Couldn't watch read FIFO for events");
+            throw std::runtime_error("Couldn't watch read FIFO for events");
         }
         if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLOUT | EPOLLET, *this, write_fd)) {
-            die("Couldn't watch write FIFO for events");
+            throw std::runtime_error("Couldn't watch write FIFO for events");
         }
     }
 
@@ -310,26 +296,20 @@ struct client_fifo : client_fd {
         parser.Reset();
         std::cout << "trying to reopen write FIFO" << std::endl;
         if (close(write_fd)) {
+            write_fd = -1; // retrying close() isn't a good idea
             throw std::runtime_error("Couldn't close FIFO");
         }
-        write_fd = -1;
-        try {
-            write_fd = open_fifo(write_path, O_RDWR);
-            if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLOUT | EPOLLET, *this, write_fd)) {
-                die("Couldn't watch write FIFO for events");
-            }
-        } catch (...) {
-            // don't leak fds
-            close(read_fd);
-            close(write_fd);
-            read_fd = write_fd = -1;
-            throw;
+        write_fd = open_fifo(write_path, O_RDWR);
+        if (write_fd == -1)
+            throw std::runtime_error("Couldn't reopen write FIFO");
+        if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLOUT | EPOLLET, *this, write_fd)) {
+            throw std::runtime_error("Couldn't watch write FIFO for events");
         }
     }
 
     void advance(uint32_t events) override {
         if (events & EPOLLERR) {
-            die("Caught error state on a FIFO fd");
+            throw std::runtime_error("Caught error state on a FIFO fd");
         }
 
         if (events & EPOLLIN) {
@@ -350,12 +330,18 @@ struct client_fifo : client_fd {
             return cleanup();
         }
     }
+
+    ~client_fifo() {
+        close(read_fd);
+        close(write_fd);
+    }
 };
 
 struct listen_fd : ep_fd {
+    int fd;
     std::list<client_socket> &client_list;
     listen_fd(int fd_, int epoll_fd_, std::shared_ptr<Afina::Storage> ps_, std::list<client_socket> &client_list_)
-        : ep_fd(fd_, epoll_fd_, ps_), client_list(client_list_) {}
+        : ep_fd(epoll_fd_, ps_), fd(fd_), client_list(client_list_) {}
     void advance(uint32_t events) override {
         if (events & (EPOLLHUP | EPOLLERR)) {
             close(fd);
@@ -374,7 +360,7 @@ struct listen_fd : ep_fd {
                                              client_list.end() /* see below */);
             cl_it->self = cl_it; // sets the self field so it would be able to suicide later
             // register the object in epoll fd
-            if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT | EPOLLET, *cl_it))
+            if (epoll_modify(epoll_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT | EPOLLET, *cl_it, client_socket))
                 throw std::runtime_error("epollctl failed to add client socket");
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK)
@@ -382,6 +368,10 @@ struct listen_fd : ep_fd {
         // oh well
         close(fd);
         throw std::runtime_error("Socket accept() failed");
+    }
+    ~listen_fd() {
+        shutdown(fd, SHUT_RDWR);
+        close(fd);
     }
 };
 
@@ -434,7 +424,7 @@ void ServerImpl::RunEpoll() {
     std::list<client_socket> client_list;
     listen_fd listening_object{server_socket, epoll_sock, pStorage, client_list};
     // add the listen socket to the epoll set
-    if (epoll_modify(epoll_sock, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, listening_object))
+    if (epoll_modify(epoll_sock, EPOLL_CTL_ADD, EPOLLIN | EPOLLET, listening_object, server_socket))
         throw std::runtime_error("epoll_ctl failed to add the listen socket");
 
     client_fifo fifo_handler{epoll_sock, pStorage};
@@ -464,17 +454,7 @@ void ServerImpl::RunEpoll() {
             ((ep_fd *)events[i].data.ptr)->advance(events[i].events);
     }
 
-    // clean up all sockets involved
-    shutdown(server_socket, SHUT_RDWR);
-    close(server_socket);
-    for (client_socket &cl : client_list) {
-        // don't call .cleanup() because it invalidates cl
-        shutdown(cl.fd, SHUT_RDWR);
-        close(cl.fd);
-    }
-    // at this point it probably doesn't matter if some of them were -1
-    close(fifo_handler.read_fd);
-    close(fifo_handler.write_fd);
+    // clean up the epoll fd, others are cleaned up in destructors
     close(epoll_sock);
 }
 
