@@ -20,7 +20,6 @@ bool Parser::Parse(const char *input, const size_t size, size_t &parsed) {
     bool negative;
     std::string curKey;
 
-    bytes = 0;
     for (pos = 0; pos < size && !parse_complete; pos++) {
         char c = input[pos];
 
@@ -155,7 +154,7 @@ bool Parser::Parse(const char *input, const size_t size, size_t &parsed) {
     }
 
     parsed += pos;
-    return state == State::sLF;
+    return parse_complete;
 }
 
 // See Parse.h
