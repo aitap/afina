@@ -3,7 +3,7 @@ set(SOURCE_FILES
     MapBasedNoLockImpl.cpp
     MapBasedGlobalLockImpl.cpp
 #    MapBasedStripedImpl.cpp
-#    MapBasedRWLockImpl.cpp
+    MapBasedRWLockImpl.cpp
 )
 
 add_library(Storage ${SOURCE_FILES})

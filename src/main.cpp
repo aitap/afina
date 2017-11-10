@@ -22,6 +22,7 @@
 #include "network/epoll/ServerImpl.h"
 #include "network/nonblocking/ServerImpl.h"
 #include "storage/MapBasedGlobalLockImpl.h"
+#include "storage/MapBasedRWLockImpl.h"
 
 #include <sched.h>
 
@@ -134,6 +135,8 @@ int main(int argc, char **argv) {
 
     if (storage_type == "map_global") {
         app.storage = std::make_shared<Afina::Backend::MapBasedGlobalLockImpl>();
+	} else if (storage_type == "map_rwlock") {
+        app.storage = std::make_shared<Afina::Backend::MapBasedRWLockImpl>();
     } else {
         throw std::runtime_error("Unknown storage type");
     }

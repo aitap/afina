@@ -40,7 +40,7 @@ bool MapBasedNoLockImpl::PutIfAbsent(const std::string &key, const std::string &
     if (it != hash.end())
         return false;
     // this acquires the mutex again => must be recursive
-    /* return ! */ Put(key, value);
+    /* return ! */ MapBasedNoLockImpl::Put(key, value); // do NOT call any locking overrides -- that's not what we want
     return true;
 }
 
@@ -61,7 +61,7 @@ bool MapBasedNoLockImpl::Set(const std::string &key, const std::string &value) {
     if (it != hash.end())
         return false;
     // "Set" refreshes the key, like PutIfAbsent but otherwise
-    /* return */ Put(key, value);
+    /* return */ MapBasedNoLockImpl::Put(key, value);
     return true;
 }
 
