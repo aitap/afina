@@ -2,7 +2,7 @@
 set(SOURCE_FILES
     MapBasedNoLockImpl.cpp
     MapBasedGlobalLockImpl.cpp
-#    MapBasedStripedImpl.cpp
+    MapBasedStripedLockImpl.cpp
     MapBasedRWLockImpl.cpp
 )
 
