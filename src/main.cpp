@@ -1,4 +1,3 @@
-#define _POSIX_C_SOURCE 200809L
 #include <chrono>
 #include <fstream>
 #include <iostream>
@@ -23,6 +22,20 @@
 #include "network/epoll/ServerImpl.h"
 #include "network/nonblocking/ServerImpl.h"
 #include "storage/MapBasedGlobalLockImpl.h"
+
+#include <sched.h>
+
+static unsigned int get_cpu_count() {
+    cpu_set_t myprocessors;
+    if (sched_getaffinity(0, sizeof(myprocessors), &myprocessors)) { // afinity, lol
+        throw std::runtime_error("sched_getaffinity failed");
+    }
+    int ret = CPU_COUNT(&myprocessors);
+    if (ret <= 0) { // why should they have made it signed?!
+        throw std::runtime_error("CPU_COUNT returned WTF");
+    }
+    return ret;
+}
 
 typedef struct {
     std::shared_ptr<Afina::Storage> storage;
@@ -249,7 +262,7 @@ int main(int argc, char **argv) {
             s->set_fifo(options["readfifo"].as<std::string>(), options["writefifo"].as<std::string>());
         }
         app.storage->Start();
-        app.server->Start(8080, 10);
+        app.server->Start(8080, get_cpu_count());
 
         std::cout << "Application started" << std::endl;
 
