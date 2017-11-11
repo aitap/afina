@@ -6,9 +6,9 @@ use FindBin '$Bin';
 use IPC::Run qw(run start finish);
 
 # memcachetest doesn't like it when Blocking::ServerImpl closes the connection at populating phase
-my @network = qw(epoll uv);
+my @network = qw(blocking epoll uv);
 my @storage = qw(map_global map_rwlock map_striped);
-my @set_proba = qw(100 0 10 20 30 40);
+my @set_proba = qw(0 10 20 30 40 100);
 my $storage_size = 1024;
 my $num_connections = 500;
 my $num_iterations = 1e6;
@@ -38,7 +38,7 @@ sub run_benchmark {
 	run
 		[
 			"$Bin/../../memcachetest/memcachetest", '-h', '127.0.0.1:8080', '-i', $storage_size,
-			'-P', $sp, '-W', $num_connections, '-c', $num_iterations, '-t', $num_cores, #'-S'
+			'-P', $sp, '-W', $num_connections, '-c', $num_iterations, '-t', $num_cores, '-L', 3
 		],
 		'>&', \$out
 	or die "memcachetest returned error code $?:\n$out";
@@ -61,7 +61,7 @@ sub run_benchmark {
 open my $tsv, ">", "$cpu_model $num_cores.txt";
 select $tsv;
 
-print "probablility";
+print "probability";
 for my $net (@network) {
 	for my $st (@storage) {
 		print "\t${net}_${st}_Throughput\t${net}_${st}_Get\t${net}_${st}_Set";
