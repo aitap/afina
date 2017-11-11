@@ -39,7 +39,7 @@ public:
     bool Get(const std::string &key, std::string &value) const override;
 
 private:
-    mutable std::recursive_mutex _lock;
+    mutable std::mutex _lock;
 };
 
 } // namespace Backend
