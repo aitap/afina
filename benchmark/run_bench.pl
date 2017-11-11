@@ -4,7 +4,6 @@ use warnings;
 use autodie;
 use FindBin '$Bin';
 use IPC::Run qw(run start finish);
-use Data::Dump 'dd';
 
 # memcachetest doesn't like it when Blocking::ServerImpl closes the connection at populating phase
 my @network = qw(epoll uv);

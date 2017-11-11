@@ -1,0 +1,7 @@
+probablility	epoll_map_global_Throughput	epoll_map_global_Get	epoll_map_global_Set	epoll_map_rwlock_Throughput	epoll_map_rwlock_Get	epoll_map_rwlock_Set	epoll_map_striped_Throughput	epoll_map_striped_Get	epoll_map_striped_Set	uv_map_global_Throughput	uv_map_global_Get	uv_map_global_Set	uv_map_rwlock_Throughput	uv_map_rwlock_Get	uv_map_rwlock_Set	uv_map_striped_Throughput	uv_map_striped_Get	uv_map_striped_Set
+100	49962.6	NaN	215	50197.4	NaN	217	51894.7	NaN	204	41542.8	NaN	174	41671.3	NaN	172	41813.3	NaN	251
+0	47059.7	235	NaN	48333.3	226	NaN	47905.8	158	NaN	38953.1	267	NaN	39515.8	185	NaN	39547.8	185	NaN
+10	47195	160	160	48667.8	219	156	47524.6	230	157	39148	261	184	39178.6	187	185	38945.4	267	185
+20	47270.3	233	160	47728.6	230	230	47778.3	231	231	38899.2	264	184	38861.4	188	186	38541	273	272
+30	47786.9	158	157	47661.2	231	160	48240.5	226	154	39383.1	186	182	38909.7	271	186	39353.4	188	184
+40	47490.5	232	159	48320.8	156	156	48015.5	159	229	38914.5	268	261	39207.1	267	184	39501.6	188	262
