@@ -8,10 +8,10 @@ use IPC::Run qw(run start finish);
 # memcachetest doesn't like it when Blocking::ServerImpl closes the connection at populating phase
 my @network = qw(blocking epoll uv);
 my @storage = qw(map_global map_rwlock map_striped);
-my @set_proba = qw(0 10 20 30 40 100);
+my @set_proba = qw(0 5 10 15 20 25 30 35 40 45 100);
 my $storage_size = 1024;
 my $num_connections = 500;
-my $num_iterations = 1e6;
+my $num_iterations = 2e6;
 
 my ($cpu_model, $num_cores) = do {
 	my $cpuinfo = do { open my $fh, "</proc/cpuinfo"; local $/; <$fh> };
