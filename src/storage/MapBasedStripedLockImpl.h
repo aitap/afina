@@ -1,7 +1,7 @@
 #ifndef AFINA_STORAGE_MAP_BASED_STRIPED_LOCK_IMPL_H
 #define AFINA_STORAGE_MAP_BASED_STRIPED_LOCK_IMPL_H
 
-#include <list>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -37,8 +37,7 @@ public:
     bool Get(const std::string &key, std::string &value) const override;
 
 private:
-    std::list<MapBasedGlobalLockImpl> buckets;
-    std::vector<std::list<MapBasedGlobalLockImpl>::iterator> bucket_access;
+    std::vector<std::unique_ptr<MapBasedGlobalLockImpl>> buckets;
 };
 
 } // namespace Backend
