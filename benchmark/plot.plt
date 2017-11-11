@@ -19,19 +19,19 @@ do for [net in "blocking epoll uv"] {
 	plot \
 		for [storage in "map_global map_rwlock map_striped"] \
 			filename using "probability":(column(sprintf("%s_%s_Get", net, storage))):(color(storage)) \
-			w lp lc variable pt 1 axes x1y1 not, \
+			w lp lw 1.5 ps 1.5 lc variable pt 1 axes x1y1 not, \
 		for [storage in "map_global map_rwlock map_striped"] \
 			filename using "probability":(column(sprintf("%s_%s_Set", net, storage))):(color(storage)) \
-			w lp lc variable pt 2 axes x1y1 not, \
+			w lp lw 1.5 ps 1.5 lc variable pt 2 axes x1y1 not, \
 		for [storage in "map_global map_rwlock map_striped"] \
 			filename using "probability":(column(sprintf("%s_%s_Throughput", net, storage))):(color(storage)) \
-			w lp lc variable pt 3 dt 2 not axes x1y2, \
-	0/0 w lp pt 1 lc 4 t "Set", \
-	0/0 w lp pt 2 lc 4 t "Get", \
-	0/0 w lp pt 3 dt 2 lc 4 t "Throughput", \
-	0/0 w lp lc 1 pt 4 t "GlobalLock", \
-	0/0 w lp lc 2 pt 4 t "RWLock", \
-	0/0 w lp lc 3 pt 4 t "Striped"
+			w lp lw 1.5 ps 1.5 lc variable pt 3 dt 2 not axes x1y2, \
+		0/0 w lp lw 1.5 ps 1.5 pt 1 lc 4 t "Set", \
+		0/0 w lp lw 1.5 ps 1.5 pt 2 lc 4 t "Get", \
+		0/0 w lp lw 1.5 ps 1.5 pt 3 dt 2 lc 4 t "Throughput", \
+		0/0 w l lw 1.5 lc 1 t "GlobalLock", \
+		0/0 w l lw 1.5 lc 2 t "RWLock", \
+		0/0 w l lw 1.5 lc 3 t "Striped"
 }
 
 
