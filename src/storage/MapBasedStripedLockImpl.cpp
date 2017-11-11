@@ -6,7 +6,7 @@ namespace Backend {
 
 MapBasedStripedLockImpl::MapBasedStripedLockImpl(size_t num_buckets, size_t max_size) {
     for (size_t i = 0; i < num_buckets; i++) {
-        buckets.push_back(std::unique_ptr<MapBasedGlobalLockImpl>(new MapBasedGlobalLockImpl {max_size}));
+        buckets.push_back(std::unique_ptr<MapBasedGlobalLockImpl>(new MapBasedGlobalLockImpl{max_size}));
     }
 }
 

@@ -20,7 +20,7 @@
 
 #include "network/blocking/ServerImpl.h"
 #include "network/epoll/ServerImpl.h"
-#include "network/nonblocking/ServerImpl.h"
+#include "network/uv/ServerImpl.h"
 
 #include "storage/MapBasedGlobalLockImpl.h"
 #include "storage/MapBasedRWLockImpl.h"
@@ -153,10 +153,10 @@ int main(int argc, char **argv) {
 
     if (network_type == "blocking") {
         app.server = std::make_shared<Afina::Network::Blocking::ServerImpl>(app.storage);
-    } else if (network_type == "epoll") {
+    } else if (network_type == "epoll" || network_type == "nonblocking") {
         app.server = std::make_shared<Afina::Network::Epoll::ServerImpl>(app.storage);
-    } else if (network_type == "nonblocking") {
-        app.server = std::make_shared<Afina::Network::NonBlocking::ServerImpl>(app.storage);
+    } else if (network_type == "uv") {
+        app.server = std::make_shared<Afina::Network::UV::ServerImpl>(app.storage);
     } else {
         throw std::runtime_error("Unknown network type");
     }
