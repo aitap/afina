@@ -1,11 +1,8 @@
-#ifndef AFINA_STORAGE_MAP_BASED_GLOBAL_LOCK_IMPL_H
-#define AFINA_STORAGE_MAP_BASED_GLOBAL_LOCK_IMPL_H
+#ifndef AFINA_STORAGE_MAP_BASED_RW_LOCK_IMPL_H
+#define AFINA_STORAGE_MAP_BASED_RW_LOCK_IMPL_H
 
-#include <list>
-#include <mutex>
+#include <pthread.h>
 #include <string>
-#include <unordered_map>
-#include <utility>
 
 #include "MapBasedNoLockImpl.h"
 #include <afina/Storage.h>
@@ -18,10 +15,10 @@ namespace Backend {
  *
  *
  */
-class MapBasedGlobalLockImpl : public MapBasedNoLockImpl {
+class MapBasedRWLockImpl : public MapBasedNoLockImpl {
 public:
-    MapBasedGlobalLockImpl(size_t max_size = 1024) : MapBasedNoLockImpl(max_size) {}
-    ~MapBasedGlobalLockImpl() {}
+    MapBasedRWLockImpl(size_t max_size = 1024);
+    ~MapBasedRWLockImpl();
 
     // Implements Afina::Storage interface
     bool Put(const std::string &key, const std::string &value) override;
@@ -39,10 +36,10 @@ public:
     bool Get(const std::string &key, std::string &value) const override;
 
 private:
-    mutable std::mutex _lock;
+    mutable pthread_rwlock_t lock;
 };
 
 } // namespace Backend
 } // namespace Afina
 
-#endif // AFINA_STORAGE_MAP_BASED_GLOBAL_LOCK_IMPL_H
+#endif // AFINA_STORAGE_MAP_BASED_RW_LOCK_IMPL_H

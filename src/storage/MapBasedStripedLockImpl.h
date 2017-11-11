@@ -1,13 +1,11 @@
-#ifndef AFINA_STORAGE_MAP_BASED_GLOBAL_LOCK_IMPL_H
-#define AFINA_STORAGE_MAP_BASED_GLOBAL_LOCK_IMPL_H
+#ifndef AFINA_STORAGE_MAP_BASED_STRIPED_LOCK_IMPL_H
+#define AFINA_STORAGE_MAP_BASED_STRIPED_LOCK_IMPL_H
 
-#include <list>
-#include <mutex>
+#include <memory>
 #include <string>
-#include <unordered_map>
-#include <utility>
+#include <vector>
 
-#include "MapBasedNoLockImpl.h"
+#include "MapBasedGlobalLockImpl.h"
 #include <afina/Storage.h>
 
 namespace Afina {
@@ -18,10 +16,10 @@ namespace Backend {
  *
  *
  */
-class MapBasedGlobalLockImpl : public MapBasedNoLockImpl {
+class MapBasedStripedLockImpl : public Afina::Storage {
 public:
-    MapBasedGlobalLockImpl(size_t max_size = 1024) : MapBasedNoLockImpl(max_size) {}
-    ~MapBasedGlobalLockImpl() {}
+    MapBasedStripedLockImpl(size_t num_buckets, size_t max_size = 1024);
+    ~MapBasedStripedLockImpl() {}
 
     // Implements Afina::Storage interface
     bool Put(const std::string &key, const std::string &value) override;
@@ -39,10 +37,10 @@ public:
     bool Get(const std::string &key, std::string &value) const override;
 
 private:
-    mutable std::mutex _lock;
+    std::vector<std::unique_ptr<MapBasedGlobalLockImpl>> buckets;
 };
 
 } // namespace Backend
 } // namespace Afina
 
-#endif // AFINA_STORAGE_MAP_BASED_GLOBAL_LOCK_IMPL_H
+#endif // AFINA_STORAGE_MAP_BASED_STRIPED_LOCK_IMPL_H
