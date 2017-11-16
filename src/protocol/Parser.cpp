@@ -18,8 +18,7 @@ namespace Protocol {
 // See Parse.h
 bool Parser::Parse(const char *input, const size_t size, size_t &parsed) {
     size_t pos;
-    bool negative;
-    std::string curKey;
+    parsed = 0;
 
     for (pos = 0; pos < size && !parse_complete; pos++) {
         char c = input[pos];
@@ -188,6 +187,8 @@ void Parser::Reset() {
     state = State::sName;
     name.clear();
     keys.clear();
+    curKey.clear();
+    parse_complete = false;
     flags = 0;
     bytes = 0;
     exprtime = 0;
