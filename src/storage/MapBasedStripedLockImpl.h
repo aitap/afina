@@ -1,6 +1,7 @@
 #ifndef AFINA_STORAGE_MAP_BASED_STRIPED_LOCK_IMPL_H
 #define AFINA_STORAGE_MAP_BASED_STRIPED_LOCK_IMPL_H
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -39,6 +40,7 @@ public:
 private:
     MapBasedGlobalLockImpl *buckets;
     size_t num_buckets;
+    std::atomic<size_t> count;
 };
 
 } // namespace Backend

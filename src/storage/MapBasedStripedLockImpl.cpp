@@ -4,7 +4,8 @@
 namespace Afina {
 namespace Backend {
 
-MapBasedStripedLockImpl::MapBasedStripedLockImpl(size_t num_buckets_, size_t max_size) : num_buckets(num_buckets_) {
+MapBasedStripedLockImpl::MapBasedStripedLockImpl(size_t num_buckets_, size_t max_size)
+    : num_buckets(num_buckets_), count(0) {
     // the wonders of immovable objects with important constructor arguments
     buckets = (MapBasedGlobalLockImpl *)operator new[](sizeof(MapBasedGlobalLockImpl) * num_buckets);
     for (size_t i = 0; i < num_buckets; i++) {
