@@ -19,7 +19,7 @@ namespace Backend {
 class MapBasedStripedLockImpl : public Afina::Storage {
 public:
     MapBasedStripedLockImpl(size_t num_buckets, size_t max_size = 1024);
-    ~MapBasedStripedLockImpl() {}
+    ~MapBasedStripedLockImpl();
 
     // Implements Afina::Storage interface
     bool Put(const std::string &key, const std::string &value) override;
@@ -37,7 +37,8 @@ public:
     bool Get(const std::string &key, std::string &value) const override;
 
 private:
-    std::vector<std::unique_ptr<MapBasedGlobalLockImpl>> buckets;
+    MapBasedGlobalLockImpl *buckets;
+    size_t num_buckets;
 };
 
 } // namespace Backend
