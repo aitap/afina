@@ -9,14 +9,11 @@ namespace Backend {
 
 // See MapBasedNoLockImpl.h
 bool MapBasedNoLockImpl::Put(const std::string &key, const std::string &value) {
-    // was there an older item?
-    bool ret = false;
     auto old_hash_it = hash.find(key); // O(1)
     // store the new item
     auto new_storage_it = storage.insert(storage.begin(), std::make_pair(key, value)); // O(1)
 
     if (old_hash_it != hash.end()) { // there was an item with same key
-        ret = true;
         // destroy the old item in both containers
         storage.erase(old_hash_it->second); // O(1)
         hash.erase(old_hash_it);            // O(1)
@@ -31,7 +28,7 @@ bool MapBasedNoLockImpl::Put(const std::string &key, const std::string &value) {
         storage.erase(last);     // O(1)
     }
 
-    return ret; // return whether there was an element before
+    return true; // return whether we succeeded in inserting the element (of course we did)
 }
 
 // See MapBasedNoLockImpl.h
