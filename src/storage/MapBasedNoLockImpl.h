@@ -37,6 +37,10 @@ public:
     // Implements Afina::Storage interface
     bool Get(const std::string &key, std::string &value) const override;
 
+    bool evict_oldest();
+
+    size_t size() const;
+
 private:
     size_t _max_size;
 

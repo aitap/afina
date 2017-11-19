@@ -22,10 +22,7 @@ bool MapBasedNoLockImpl::Put(const std::string &key, const std::string &value) {
 
     // clean up
     if (hash.size() > _max_size) {
-        auto last = storage.end();
-        last--;                  // end is past-the-end, O(1)
-        hash.erase(last->first); // O(key count) = O(1)
-        storage.erase(last);     // O(1)
+        evict_oldest();
     }
 
     return true; // return whether we succeeded in inserting the element (of course we did)
@@ -36,9 +33,7 @@ bool MapBasedNoLockImpl::PutIfAbsent(const std::string &key, const std::string &
     auto it = hash.find(key); // O(1)
     if (it != hash.end())
         return false;
-    // this acquires the mutex again => must be recursive
-    /* return ! */ MapBasedNoLockImpl::Put(key, value); // do NOT call any locking overrides -- that's not what we want
-    return true;
+    return MapBasedNoLockImpl::Put(key, value); // do NOT call any locking overrides -- that's not what we want
 }
 
 // See MapBasedNoLockImpl.h
@@ -58,8 +53,7 @@ bool MapBasedNoLockImpl::Set(const std::string &key, const std::string &value) {
     if (it != hash.end())
         return false;
     // "Set" refreshes the key, like PutIfAbsent but otherwise
-    /* return */ MapBasedNoLockImpl::Put(key, value);
-    return true;
+    return MapBasedNoLockImpl::Put(key, value);
 }
 
 // See MapBasedNoLockImpl.h
@@ -71,6 +65,19 @@ bool MapBasedNoLockImpl::Delete(const std::string &key) {
     hash.erase(it);
     return true; // return if the key was present in the first place
 }
+
+bool MapBasedNoLockImpl::evict_oldest() {
+    if (!hash.size())
+        return false; // nothing to evict
+
+    auto last = storage.end();
+    last--;                  // end is past-the-end, O(1)
+    hash.erase(last->first); // O(key count) = O(1)
+    storage.erase(last);     // O(1)
+    return true;
+}
+
+size_t MapBasedNoLockImpl::size() const { return hash.size(); }
 
 } // namespace Backend
 } // namespace Afina

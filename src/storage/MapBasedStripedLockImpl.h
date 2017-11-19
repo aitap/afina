@@ -38,8 +38,9 @@ public:
     bool Get(const std::string &key, std::string &value) const override;
 
 private:
-    MapBasedGlobalLockImpl *buckets;
-    size_t num_buckets;
+    std::vector<MapBasedNoLockImpl> buckets;
+    std::mutex *locks;
+    size_t num_buckets, max_size;
     std::atomic<size_t> count;
 };
 
