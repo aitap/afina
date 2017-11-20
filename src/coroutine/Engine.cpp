@@ -28,11 +28,12 @@ void Engine::Restore(context &ctx) {
         onmystack++;  // tell the compiler NOT to optimize the tail-call
         return;
     }
-    // restore the stack
-    memcpy(StackBottom, std::get<0>(ctx.Stack), std::get<1>(ctx.Stack));
+    // other methods use this field, so set it
+    cur_routine = &ctx;
+    // restore the stack, starting at the deepest part of the stack (lowest address)
+    memcpy(StackBottom - std::get<1>(ctx.Stack), std::get<0>(ctx.Stack), std::get<1>(ctx.Stack));
     // jump to the frame
-    return longjmp(ctx.Environment, 1);
-    // Engine::run will clean up for us
+    return longjmp(ctx.Environment, 1); // actually doesn't return
 }
 
 void Engine::yield() {}
@@ -40,16 +41,24 @@ void Engine::yield() {}
 void Engine::sched(void *routine_) {
     context *to_call = (context *)routine_;
     context *caller = new context;
+    to_call->caller = caller;
+    caller->callee = to_call;
+
+    caller->next = alive;
+    alive = caller;
+    if (caller->next) {
+        caller->next->prev = caller;
+    }
+
     Store(*caller);
     if (setjmp(caller->Environment)) {
         // we got our stack restored and called back
         // clean up and get on with our work
-        delete[] std::get<0>(caller.Stack);
         delete caller;
         return;
     }
-    // FIXME: else what?
-    // add to some queue, I guess
+
+    Restore(*to_call);
 }
 
 } // namespace Coroutine

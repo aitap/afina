@@ -38,7 +38,7 @@ private:
         context *caller = nullptr;
 
         // Coroutine got control from the current one. Whenever current routine
-        // continues self exectution it must transfers control to callee if any
+        // continues self execution it must transfer control to callee if any
         context *callee = nullptr;
 
         // To include routine in the different lists, such as "alive", "blocked", etc
@@ -69,7 +69,7 @@ private:
      */
     char *StackBottom;
 
-    /**const int&
+    /**
      * Current coroutine
      */
     context *cur_routine;
