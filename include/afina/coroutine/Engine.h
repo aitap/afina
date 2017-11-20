@@ -59,8 +59,6 @@ private:
             }
 
             delete[] std::get<0>(Stack);
-
-            // pc->prev = pc->next = nullptr; // what for?
         }
     };
 

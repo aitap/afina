@@ -45,26 +45,26 @@ void Engine::yield() {
     }
 }
 
+// cur_routine is the caller, we should land in it when the callee returns
+// unless sched is called from run() or start(), then it's NULL
 void Engine::sched(void *routine_) {
     context *to_call = (context *)routine_;
-    context *caller = new context;
-    to_call->caller = caller;
-    caller->callee = to_call;
+    to_call->caller = cur_routine;
+    if (cur_routine) {
+        cur_routine->callee = to_call;
+        cur_routine->next = alive;
 
-    caller->next = alive;
-    alive = caller;
-    if (caller->next) {
-        caller->next->prev = caller;
+        alive = cur_routine;
+        if (cur_routine->next) {
+            cur_routine->next->prev = cur_routine;
+        }
+
+        if (setjmp(cur_routine->Environment)) {
+            // we got our stack restored and called back
+            return;
+        }
     }
-
-    Store(*caller);
-    if (setjmp(caller->Environment)) {
-        // we got our stack restored and called back
-        // clean up and get on with our work
-        delete caller;
-        return;
-    }
-
+    cur_routine = to_call;
     Restore(*to_call);
 }
 
