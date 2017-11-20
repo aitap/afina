@@ -36,7 +36,14 @@ void Engine::Restore(context &ctx) {
     return longjmp(ctx.Environment, 1); // actually doesn't return
 }
 
-void Engine::yield() {}
+void Engine::yield() {
+    if (alive) {
+        context *to_call = alive;
+        alive = alive->next;
+        alive->prev = nullptr;
+        return sched(to_call);
+    }
+}
 
 void Engine::sched(void *routine_) {
     context *to_call = (context *)routine_;
