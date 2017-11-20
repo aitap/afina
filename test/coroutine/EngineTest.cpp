@@ -15,7 +15,7 @@ TEST(CoroutineTest, SimpleStart) {
 
     ASSERT_EQ(3, result);
 }
-/*
+
 void printa(Afina::Coroutine::Engine &pe, std::stringstream &out, void *&other) {
     out << "A1 ";
     std::cout << "A1 " << std::endl;
@@ -68,4 +68,4 @@ TEST(CoroutineTest, Printer) {
     std::string result;
     engine.start(_printer, engine, result);
     ASSERT_STREQ("A1 B1 A2 B2 A3 B3 END", result.c_str());
-}*/
+}
