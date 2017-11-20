@@ -20,32 +20,49 @@ private:
      * A single coroutine instance which could be scheduled for execution
      * should be allocated on heap
      */
-    struct context;
-    typedef struct context {
+    struct context {
         // coroutine stack start address
         char *Low = nullptr;
 
         // coroutine stack end address
-        char *Hight = nullptr;
+        char *High = nullptr;
 
         // coroutine stack copy buffer
-        std::tuple<char *, uint32_t> Stack = std::make_tuple(nullptr, 0);
+        std::tuple<char *, std::ptrdiff_t> Stack = std::make_tuple(nullptr, 0);
 
         // Saved coroutine context (registers)
         jmp_buf Environment;
 
         // Coroutine that has started this one. Once current routine is done, control must
         // be passed back to caller
-        struct context *caller = nullptr;
+        context *caller = nullptr;
 
         // Coroutine got control from the current one. Whenever current routine
         // continues self exectution it must transfers control to callee if any
-        struct context *callee = nullptr;
+        context *callee = nullptr;
 
-        // To include routine in the different lists, such as "alive", "blocked", e.t.c
-        struct context *prev = nullptr;
-        struct context *next = nullptr;
-    } context;
+        // To include routine in the different lists, such as "alive", "blocked", etc
+        context *prev = nullptr;
+        context *next = nullptr;
+
+        ~context() {
+            if (prev) {
+                prev->next = next;
+            }
+
+            if (next) {
+                next->prev = prev;
+            }
+
+            if (caller) {
+                caller->callee = nullptr;
+            }
+
+            delete[] std::get<0>(Stack);
+
+            // pc->prev = pc->next = nullptr; // what for?
+        }
+    };
 
     /**
      * Where coroutines stack begins
@@ -111,7 +128,7 @@ public:
      * Entry point into the engine. Prepare all internal mechanics and starts given function which is
      * considered as main.
      *
-     * Once control returns back to caller of start all coroutines are done execution, in other words,
+     * Once control returns back to caller of start all coroutines are done executing, in other words,
      * this function doesn't return control until all coroutines are done.
      *
      * @param pointer to the main coroutine
@@ -142,8 +159,8 @@ public:
     }
 
     /**
-     * Register new coroutine. It won't receive control until scheduled explicitely or implicitly. In case of some
-     * errors function returns -1
+     * Register new coroutine. It won't receive control until scheduled explicitely or implicitly. In case of any
+     * errors function returns nullptr
      */
     template <typename... Ta> void *run(void (*func)(Ta...), Ta &&... args) {
         if (this->StackBottom == 0) {
@@ -167,20 +184,9 @@ public:
 
             // Routine has completed its execution, time to delete it. Note that we should be extremely careful in where
             // to pass control after that. We never want to go backward by stack as that would mean to go backward in
-            // time. Function run() has already return once (when setjmp returns 0), so return second return from run
-            // would looks a bit awkward
+            // time. Function run() has already returned once (when setjmp returns 0), so return second return from run
+            // would look a bit awkward
             context *next = pc->caller;
-            if (pc->prev != nullptr) {
-                pc->prev->next = pc->next;
-            }
-
-            if (pc->next != nullptr) {
-                pc->next->prev = pc->prev;
-            }
-
-            if (pc->caller != nullptr) {
-                pc->caller->callee = nullptr;
-            }
 
             if (alive == cur_routine) {
                 alive = alive->next;
@@ -189,9 +195,7 @@ public:
             // current coroutine finished, and the pointer is not relevant now
             cur_routine = nullptr;
 
-            pc->prev = pc->next = nullptr;
-            delete std::get<0>(pc->Stack);
-            delete pc;
+            delete pc; // destructor will clean up
 
             // We cannot return here, as this function "returned" once already, so here we must select some other
             // coroutine to run. As current coroutine is completed and can't be scheduled anymore, it is safe to
