@@ -22,7 +22,7 @@ void Engine::Store(context &ctx) {
 }
 
 void Engine::Restore(context &ctx) {
-    volatile unsigned char onmystack = 0;
+    volatile char onmystack;
     // don't clobber the state by longjmp function call
     if ((char *)&onmystack > StackBottom - std::get<1>(ctx.Stack)) {
         volatile uint64_t filler = 0;

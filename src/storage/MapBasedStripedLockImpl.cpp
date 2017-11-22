@@ -16,13 +16,17 @@ MapBasedStripedLockImpl::MapBasedStripedLockImpl(size_t num_buckets_, size_t max
 bool MapBasedStripedLockImpl::Put(const std::string &key, const std::string &value) {
     auto idx = std::hash<std::string>()(key) % num_buckets;
     std::lock_guard<std::mutex> lock{locks[idx]};
-    if (count.load() >= max_size) {          // uh oh, can't allow adding elements
-        return buckets[idx].Set(key, value); // Set will return false if value doesn't exist
-                                             // either way, the count didn't change
-    }
-    size_t old = buckets[idx].size();
+    size_t cur_size = count.load();
+    do {
+        if (cur_size >= max_size) {              // uh oh, can't allow adding elements
+            return buckets[idx].Set(key, value); // Set will return false if value doesn't exist
+                                                 // either way, the count didn't change
+        }
+    } while (!count.compare_exchange_strong(cur_size, cur_size + 1));
+    // we have "allocated" a place for a new element, but maybe we won't use it
+    size_t bucket_size = buckets[idx].size();
     bool ret = buckets[idx].Put(key, value);
-    count += buckets[idx].size() - old;
+    count += buckets[idx].size() - bucket_size - 1;
     return ret;
 }
 
@@ -30,14 +34,17 @@ bool MapBasedStripedLockImpl::Put(const std::string &key, const std::string &val
 bool MapBasedStripedLockImpl::PutIfAbsent(const std::string &key, const std::string &value) {
     auto idx = std::hash<std::string>()(key) % num_buckets;
     std::lock_guard<std::mutex> lock{locks[idx]};
-    if (count.load() >= max_size) {
-        // if there was a value, we don't allow a Put
-        // if there wasn't, we can't grow storage anyway
-        return false;
-    }
-    size_t old = buckets[idx].size();
+    size_t cur_size = count.load();
+    do {
+        if (cur_size >= max_size) {
+            return false; // nope, can't add elements
+        }
+    } while (!count.compare_exchange_strong(cur_size, cur_size + 1));
+    // we have "allocated" a place for a new element
+    size_t bucket_size = buckets[idx].size();
     bool ret = buckets[idx].PutIfAbsent(key, value);
-    count += buckets[idx].size() - old;
+    // but maybe it wasn't absent?
+    count += buckets[idx].size() - bucket_size - 1;
     return ret;
 }
 
