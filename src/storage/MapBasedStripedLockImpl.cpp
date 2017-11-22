@@ -18,9 +18,10 @@ bool MapBasedStripedLockImpl::Put(const std::string &key, const std::string &val
     std::lock_guard<std::mutex> lock{locks[idx]};
     size_t cur_size = count.load();
     do {
-        if (cur_size >= max_size) {              // uh oh, can't allow adding elements
-            return buckets[idx].Set(key, value); // Set will return false if value doesn't exist
-                                                 // either way, the count didn't change
+        if (cur_size >= max_size) {
+            if (!buckets[idx].evict_oldest())
+                return false;                    // nope, can't add elements
+            return buckets[idx].Put(key, value); // this won't change the number of elements because the bucket is full
         }
     } while (!count.compare_exchange_strong(cur_size, cur_size + 1));
     // we have "allocated" a place for a new element, but maybe we won't use it
@@ -37,15 +38,13 @@ bool MapBasedStripedLockImpl::PutIfAbsent(const std::string &key, const std::str
     size_t cur_size = count.load();
     do {
         if (cur_size >= max_size) {
-            return false; // nope, can't add elements
+            if (!buckets[idx].evict_oldest())
+                return false; // nope, can't add elements
+            return buckets[idx].PutIfAbsent(
+                key, value); // this won't change the number of elements because the bucket is full
         }
     } while (!count.compare_exchange_strong(cur_size, cur_size + 1));
-    // we have "allocated" a place for a new element
-    size_t bucket_size = buckets[idx].size();
-    bool ret = buckets[idx].PutIfAbsent(key, value);
-    // but maybe it wasn't absent?
-    count += buckets[idx].size() - bucket_size - 1;
-    return ret;
+    return buckets[idx].PutIfAbsent(key, value);
 }
 
 // See MapBasedStripedLockImpl.h
