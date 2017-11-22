@@ -224,8 +224,8 @@ void ServerImpl::RunAcceptor() {
 
         if (connections.size() >= max_workers) {
             // benchmarks don't like server errors
-            // const char errmsg[] = "SERVER_ERROR Вас много -- я одна\r\n";
-            // send(client_socket, errmsg, sizeof(errmsg), MSG_DONTWAIT);
+            const char errmsg[] = "SERVER_ERROR Вас много -- я одна\r\n";
+            send(client_socket, errmsg, sizeof(errmsg), MSG_DONTWAIT);
             // we don't care, we should close as soon as possible and get on with it
             // but this should fit in a single TCP packet even if MTU is as small as 800, shouldn't it?
             shutdown(client_socket, SHUT_RDWR);

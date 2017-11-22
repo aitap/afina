@@ -18,7 +18,6 @@ namespace Protocol {
 // See Parse.h
 bool Parser::Parse(const char *input, const size_t size, size_t &parsed) {
     size_t pos;
-    parsed = 0;
 
     for (pos = 0; pos < size && !parse_complete; pos++) {
         char c = input[pos];
@@ -31,7 +30,7 @@ bool Parser::Parse(const char *input, const size_t size, size_t &parsed) {
                     state = State::spKey;
                 } else if (name == "get" || name == "gets") {
                     state = State::sgKey;
-                } else if (name == "stats") {
+                } else if (name == "stats" || name == "quit") {
                     state = State::sLF;
                     continue;
                 } else {
@@ -175,7 +174,7 @@ std::unique_ptr<Execute::Command> Parser::Build(uint32_t &body_size) const {
         return std::unique_ptr<Execute::Command>(new Execute::Append(keys[0], flags, exprtime));
     } else if (name == "get") {
         return std::unique_ptr<Execute::Command>(new Execute::Get(keys));
-    } else if (name == "stats") {
+    } else if (name == "stats" || name == "quit") {
         return std::unique_ptr<Execute::Command>(new Execute::Stats());
     } else {
         throw std::runtime_error("Unsupported command");

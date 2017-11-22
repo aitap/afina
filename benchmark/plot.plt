@@ -12,7 +12,7 @@ color(str) = str eq "map_global" ? 1 : str eq "map_rwlock" ? 2 : str eq "map_str
 
 do for [net in "blocking nonblocking uv"] {
 	set title net
-	set ylabel "Latency, µs"
+	set ylabel "Latency, ns"
 	plot \
 		for [storage in "map_global map_rwlock map_striped"] \
 			filename using "probability":(column(sprintf("%s_%s_Get_Latency", net, storage))):(color(storage)) \

@@ -51,8 +51,8 @@ sub run_benchmark {
 	my $kind;
 	for (split /\n/, $out) {
 		$kind = $1 if /^(\w+) operations:$/;
-		if ($kind and /\d+ us/) {
-			$latency95p{$kind} = (/(\d+) us/g)[4];
+		if ($kind and /\t\d+$/) {
+			($latency95p{$kind}) = /\t(\d+)$/;
 			undef $kind;
 		}
 	}
