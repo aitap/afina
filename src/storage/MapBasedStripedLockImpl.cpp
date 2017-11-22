@@ -25,10 +25,7 @@ bool MapBasedStripedLockImpl::Put(const std::string &key, const std::string &val
         }
     } while (!count.compare_exchange_strong(cur_size, cur_size + 1));
     // we have "allocated" a place for a new element, but maybe we won't use it
-    size_t bucket_size = buckets[idx].size();
-    bool ret = buckets[idx].Put(key, value);
-    count += buckets[idx].size() - bucket_size - 1;
-    return ret;
+    return buckets[idx].Put(key, value);
 }
 
 // See MapBasedStripedLockImpl.h
@@ -67,9 +64,9 @@ bool MapBasedStripedLockImpl::Set(const std::string &key, const std::string &val
 bool MapBasedStripedLockImpl::Delete(const std::string &key) {
     auto idx = std::hash<std::string>()(key) % num_buckets;
     std::lock_guard<std::mutex> lock{locks[idx]};
-    size_t old = buckets[idx].size();
     bool ret = buckets[idx].Delete(key);
-    count += buckets[idx].size() - old;
+    if (ret)
+        count--;
     return ret;
 }
 
